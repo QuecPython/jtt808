@@ -35,8 +35,10 @@ from usr.jt_message import LicensePlateColor, TerminalParams, \
 logger = getLogger(__name__)
 
 method = "TCP"
+ip = "220.180.239.212"
+port = 7611
 
-jtt808_obj = JTT808(ip="220.180.239.212", port=7611, method=method)
+jtt808_obj = JTT808(ip=ip, port=port, method=method)
 
 
 def test_loction_data():
@@ -209,7 +211,7 @@ def test_callback(args):
 
 
 def test_connect():
-    jtt808_obj.set_call_back(test_callback)
+    jtt808_obj.set_callback(test_callback)
     conn_res = jtt808_obj.connect()
     assert conn_res, "%s connect failed." % method
 
@@ -313,41 +315,41 @@ def test_terminal_rsa_public_key():
 def test_jtt808():
     test_connect()
 
-    # register_res = test_register()
-    # auth_code = register_res.get("auth_code")
+    register_res = test_register()
+    auth_code = register_res.get("auth_code")
 
     auth_code = "A\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0086530605779823"
     test_authentication(auth_code)
 
-    # test_heart_beat()
+    test_heart_beat()
 
-    # test_query_server_time()
+    test_query_server_time()
 
-    # test_upgrade_result_report()
+    test_upgrade_result_report()
 
-    # test_loction_report()
+    test_loction_report()
 
-    # test_event_report(0)
+    test_event_report(0)
 
-    # test_information_demand_cancellation(12, 1)
+    test_information_demand_cancellation(12, 1)
 
-    # test_electronic_waybill_report()
+    test_electronic_waybill_report()
 
-    # test_location_bulk_report()
+    test_location_bulk_report()
 
-    # test_can_bus_data_upload()
+    test_can_bus_data_upload()
 
-    # test_media_event_upload()
+    test_media_event_upload()
 
-    # test_media_data_upload()
+    test_media_data_upload()
 
-    # test_data_uplink_transparent_transmission()
+    test_data_uplink_transparent_transmission()
 
-    # test_data_compression_report()
+    test_data_compression_report()
 
-    # test_terminal_rsa_public_key()
+    test_terminal_rsa_public_key()
 
-    # test_logout()
+    test_logout()
 
 
 def main():

@@ -1540,6 +1540,8 @@ class JTMessage(object):
     def message(self):
         # Init body
         self.body_to_hex()
+        # subcontract body
+        # self.body_subcontract()
         # encrypt body
         self.rsa_encryption()
         # Init header
@@ -1573,6 +1575,17 @@ class JTMessage(object):
 
     def body_data(self):
         return self.__body_data
+
+    def body_subcontract(self):
+        if self.is_subpackage():
+            if self.__package_total <= 0:
+                raise ValueError("Packge total num must greater than 0.")
+            subpkg_len = int(int(len(self.__body) / 2) / self.__package_total)
+            for i in range(1, self.__package_total + 2):
+                start_num = i * subpkg_len * 2
+                end_num = (i + 1) * subpkg_len * 2
+                if self.__body[start_num:end_num]:
+                    self.__bodys[i] = self.__body[start_num:end_num]
 
     def body_to_hex(self):
         pass
@@ -3401,6 +3414,10 @@ class T0701(JTMessage):
         self.__message_id = 0x0701
 
     def set_params(self, data):
+        """
+        Args:
+            data(bytes): Electronic Waybill data.
+        """
         self.__data = ubinascii.hexlify(data).decode("gbk")
         self.__data_len = str_fill(hex(int(len(self.__data) / 2))[2:], target_len=8)
 
@@ -4155,6 +4172,10 @@ class T0901(JTMessage):
         self.__message_id = 0x0901
 
     def set_params(self, data):
+        """
+        Args:
+            data(str): data compression
+        """
         self.__data = ubinascii.hexlify(data).decode("gbk")
         self.__data_len = str_fill(hex(int(len(self.__data) / 2))[2:], target_len=8)
 
@@ -4195,6 +4216,11 @@ class T0A00(JTMessage):
         self.__message_id = 0x0A00
 
     def set_params(self, e, n):
+        """
+        Args:
+            e(int): e of terminal RAS public key {e, n}
+            n(str): n of terminal RAS public key {e, n}
+        """
         self.__e = str_fill(hex(e)[2:], target_len=8)
         self.__n = str_fill(hex(n)[2:], target_len=256)
 

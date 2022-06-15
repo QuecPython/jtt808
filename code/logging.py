@@ -12,6 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+@file      :logging.py
+@author    :Jack Sun (jack.sun@quectel.com)
+@brief     :<description>
+@version   :1.0.0
+@date      :2022-05-19 20:12:09
+@copyright :Copyright (c) 2022
+"""
+
 import utime
 
 
