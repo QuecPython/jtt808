@@ -712,8 +712,8 @@ class JTT808(JTT808Base):
         """Terminal registration request
 
         Args:
-            province_id(int): province id from GT/T 2260 document
-            city_id(int): city id from GT/T 2260 document
+            province_id(str): province id from GT/T 2260 document. The first two of the six digits of the administrative division code.
+            city_id(str): city id from GT/T 2260 document. The last four digits of the six digits of the administrative division code.
             manufacturer_id(str): It consists of the administrative division code of the vehicle terminal manufacturer's location and the manufacturer's id
             terminal_model(str): Manufacturer's own definition
             terminal_id(str): Manufacturer's own definition

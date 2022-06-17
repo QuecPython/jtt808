@@ -140,7 +140,7 @@ def set_jtmsg_config(jtt808_version="2019", client_id="", encryption=False):
 
     if not client_id:
         raise ValueError("client_id is not exists.")
-    client_id_len = 20 if _protocol_version > 0 else 12
+    client_id_len = 20 if _protocol_version and _protocol_version > 0 else 12
     _client_id = str_fill(client_id, target_len=client_id_len)
 
     _encryption = encryption
@@ -1503,7 +1503,7 @@ class JTMessage(object):
     def header_to_hex(self):
         kwargs = {
             "message_id": str_fill(hex(self.__message_id)[2:], target_len=4),
-            "version": str_fill(hex(self.__protocol_version)[2:], target_len=2),
+            "version": str_fill(hex(self.__protocol_version)[2:], target_len=2) if self.__protocol_version else self.__protocol_version,
             "client_id": self.__client_id,
             "serial_no": str_fill(hex(self.__serial_no)[2:], target_len=4),
             "package_total": "",
@@ -1709,9 +1709,14 @@ class T0001(JTMessage):
     def set_params(self, response_serial_no, response_msg_id, result_code):
         """
         Args:
-            response_serial_no(int): response serial no
-            response_msg_id(int): response message id
+            response_serial_no(int): response platform message serial no
+            response_msg_id(int): response platform message id
             result_code(int): `ResultCode.{result_type}`
+                0 - success/confirm
+                1 - failed
+                2 - wrong message
+                3 - not support
+                4 - alarm processing confirmation
         """
         self.__response_serial_no = str_fill(hex(response_serial_no)[2:], target_len=4)
         self.__response_msg_id = str_fill(hex(response_msg_id)[2:], target_len=4)
@@ -1734,6 +1739,17 @@ class T8001(JTMessage):
         self.__message_id = 0x8001
 
     def body_from_hex(self):
+        """
+        body_data:
+            serial_no(int): response terminal message serial no
+            message_id(int): response terminal message id
+            result_code(int):
+                0 - success/confirm
+                1 - failed
+                2 - wrong message
+                3 - not support
+                4 - alarm processing confirmation
+        """
         self.__body_data = {
             "serial_no": int(self.__body[:4], 16),
             "message_id": int(self.__body[4:8], 16),
@@ -1765,6 +1781,10 @@ class T8004(JTMessage):
         self.__message_id = 0x8004
 
     def body_from_hex(self):
+        """
+        body_data:
+            utc_time(str): YYYY-MM-DD HH:mm:ss
+        """
         time_item = [self.__body[i * 2:(i + 1) * 2] for i in range(int(len(self.__body) / 2))]
         self.__body_data = {
             "utc_time": "20%s-%s-%s %s:%s:%s" % tuple(time_item)
@@ -1779,6 +1799,13 @@ class T8003(JTMessage):
         self.__message_id = 0x8003
 
     def body_from_hex(self):
+        """
+        body_data:
+            serial_no(int): Corresponds to the message serial number of the first packet of the original message that requires retransmission.
+            total_number(int): Total number of retransmitted packets
+            package_ids(list): retransmission packet id list.
+                item(int): retransmission packet id.
+        """
         source_serial_no = int(self.__body[:4], 16)
         if self.is_version():
             total_number = int(self.__body[4:8], 16)
@@ -1830,8 +1857,8 @@ class T0100(JTMessage):
     def set_params(self, province_id, city_id, manufacturer_id, terminal_model, terminal_id, license_plate_color, license_plate):
         """
         Args:
-            province_id(int): province id from GT/T 2260 document
-            city_id(int): city id from GT/T 2260 document
+            province_id(str): province id from GT/T 2260 document. The first two of the six digits of the administrative division code.
+            city_id(str): city id from GT/T 2260 document. The last four digits of the six digits of the administrative division code.
             manufacturer_id(str): It consists of the administrative division code of the vehicle terminal manufacturer's location and the manufacturer's id
             terminal_model(str): Manufacturer's own definition
             terminal_id(str): Manufacturer's own definition
@@ -1841,27 +1868,33 @@ class T0100(JTMessage):
         self.__manufacturer_id_len = 22
         self.__terminal_model_len = 60
         self.__terminal_id_len = 60
+        self.__manufacturer_id = manufacturer_id[:11]
+        self.__terminal_model = terminal_model[:30]
+        self.__terminal_id = terminal_id[:30]
         if self.__jtt808_version == "2013":
             self.__manufacturer_id_len = 10
             self.__terminal_model_len = 40
             self.__terminal_id_len = 14
+            self.__manufacturer_id = manufacturer_id[:5]
+            self.__terminal_model = terminal_model[:20]
+            self.__terminal_id = terminal_id[:7]
         elif self.__jtt808_version == "2011":
             self.__manufacturer_id_len = 10
             self.__terminal_model_len = 16
             self.__terminal_id_len = 14
+            self.__manufacturer_id = manufacturer_id[:5]
+            self.__terminal_model = terminal_model[:8]
+            self.__terminal_id = terminal_id[:7]
 
         self.__province_id = province_id
         self.__city_id = city_id
-        self.__manufacturer_id = manufacturer_id
-        self.__terminal_model = terminal_model
-        self.__terminal_id = terminal_id
         self.__license_plate_color = license_plate_color
         self.__license_plate = license_plate
 
     def body_to_hex(self):
         kwargs = {
-            "province_id": str_fill(hex(self.__province_id)[2:], target_len=4),
-            "city_id": str_fill(hex(self.__city_id)[2:], target_len=4),
+            "province_id": str_fill(hex(int(self.__province_id))[2:], target_len=4),
+            "city_id": str_fill(hex(int(self.__city_id))[2:], target_len=4),
             "manufacturer_id": str_fill(ubinascii.hexlify(str(self.__manufacturer_id).encode('gbk')).decode('gbk'), target_len=self.__manufacturer_id_len),
             "terminal_model": str_fill(ubinascii.hexlify(str(self.__terminal_model).encode('gbk')).decode('gbk'), target_len=self.__terminal_model_len),
             "terminal_id": str_fill(ubinascii.hexlify(str(self.__terminal_id).encode('gbk')).decode('gbk'), target_len=self.__terminal_id_len),
@@ -1879,6 +1912,17 @@ class T8100(JTMessage):
         self.__message_id = 0x8100
 
     def body_from_hex(self):
+        """
+        body_data:
+            serial_no(int): terminal register serial number
+            registration_result(int):
+                0 - success
+                1 - the vehicle has been registered
+                2 - the vehicle is not in the database
+                3 - terminal is already registered
+                4 - the terminal does not exist in the database
+            auth_code(str): authentication code. This field is only available when the registration is successful.
+        """
         self.__body_data = {
             "serial_no": int(self.__body[:4], 16),
             "registration_result": int(self.__body[4:6], 16),
@@ -1935,6 +1979,13 @@ class T8103(JTMessage):
         self.__message_id = 0x8103
 
     def body_from_hex(self):
+        """
+        body_data:
+            params(list):
+                item(tuple): (param_id, real_value)
+                    param_id: terminal param id
+                    real_value: terminal param value
+        """
         param_count = int(self.__body[:2], 16)
         param_body = self.__body[2:]
         params = []
@@ -1966,6 +2017,11 @@ class T8106(JTMessage):
         self.__message_id = 0x8106
 
     def body_from_hex(self):
+        """
+        body_data:
+            param_ids(list):
+                item(int): param id
+        """
         param_count = int(self.__body[:2], 16)
         param_ids_body = self.__body[2:]
         param_ids = []
@@ -2021,7 +2077,7 @@ class T8105(JTMessage):
 
     def body_from_hex(self):
         """
-        body data:
+        body_data:
             cmd_word(int): command word
                 1 - Wireless upgrade
                 2 - Control terminal to connect to the specified server

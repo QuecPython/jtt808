@@ -37,8 +37,10 @@ logger = getLogger(__name__)
 method = "TCP"
 ip = "220.180.239.212"
 port = 7611
+client_id = "18888888888"
+version = "2019"
 
-jtt808_obj = JTT808(ip=ip, port=port, method=method)
+jtt808_obj = JTT808(ip=ip, port=port, method=method, version=version, client_id=client_id)
 
 
 def test_loction_data():
@@ -221,8 +223,8 @@ def test_heart_beat():
 
 
 def test_register():
-    province_id = 340000
-    city_id = 340100
+    province_id = "0034"
+    city_id = "0100"
     manufacturer_id = "quectel"
     terminal_model = "EC200U-CNAA"
     terminal_id = modem.getDevImei()
@@ -317,8 +319,9 @@ def test_jtt808():
 
     register_res = test_register()
     auth_code = register_res.get("auth_code")
+    print("auth_code: %s" % auth_code)
 
-    auth_code = "A\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0086530605779823"
+    auth_code = "865306057798238"
     test_authentication(auth_code)
 
     test_heart_beat()
