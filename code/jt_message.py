@@ -24,10 +24,12 @@
 @copyright :Copyright (c) 2022
 """
 
+import rsa
+import usys
 import ustruct
 import ubinascii
-from usr.common import str_fill
 from usr.logging import getLogger
+from usr.common import str_fill, SerialNo
 
 logger = getLogger(__name__)
 
@@ -71,11 +73,14 @@ _FREQUENCY_CODE = {
     4000: 0x04,
 }
 
+_serial_no_obj = SerialNo()
+
 _jtt808_version = "2019"
 _protocol_version = 1  # [2019]Protocol version
 _version = True  # Message Body Properties - Version Flag
 _client_id = ""  # Terminal Phone
-_encryption = False  # Whether RSA encryption
+_server_public_rsa_e = ""
+_server_public_rsa_n = ""
 
 _TERMINAL_PARAMS = {
     "STRING": [
@@ -114,12 +119,11 @@ _RESERVATION_TERMINAL_PARAM_ID = list(range(0x0008, 0x0010)) + \
     list(range(0xF000, 0x10000))
 
 
-def set_jtmsg_config(jtt808_version="2019", client_id="", encryption=False):
+def set_jtmsg_config(jtt808_version="2019", client_id=""):
     """Set JTT808 message global config
     Args:
         jtt808_version(str): (default: {"2019"})
         client_id(str): (default: {""})
-        encryption(bool): (default: {False})
 
     Raises:
         ValueError: [description]
@@ -128,7 +132,6 @@ def set_jtmsg_config(jtt808_version="2019", client_id="", encryption=False):
     global _protocol_version
     global _client_id
     global _version
-    global _encryption
 
     _jtt808_version = jtt808_version
 
@@ -143,20 +146,17 @@ def set_jtmsg_config(jtt808_version="2019", client_id="", encryption=False):
     client_id_len = 20 if _protocol_version and _protocol_version > 0 else 12
     _client_id = str_fill(client_id, target_len=client_id_len)
 
-    _encryption = encryption
-
 
 def get_jtmsg_config():
     """Get JTT808 message global config
 
     Returns:
-        tuple: (_jtt808_version, _client_id, _encryption,)
+        tuple: (_jtt808_version, _client_id)
     """
     global _jtt808_version
     global _client_id
-    global _encryption
 
-    return _jtt808_version, _client_id, _encryption
+    return _jtt808_version, _client_id
 
 
 class ResultCode(object):
@@ -193,7 +193,25 @@ class TerminalParams(object):
     1. Convert int/str to hex
     2. Convert hex to int/str
     """
-    def __init__(self, param_id, parse=False):
+    def __init__(self):
+        self.__param_info = {}
+
+    def parse(self, param_id, param_value):
+        _param_id_hex = "0x" + str_fill(hex(param_id)[2:], target_len=4)
+        if param_id in _TERMINAL_PARAMS["STRING"]:
+            return self.__parse_hex(param_value, data_type=str)
+        elif param_id in (_TERMINAL_PARAMS["DWORD"] + _TERMINAL_PARAMS["WORD"]):
+            return self.__parse_hex(param_value, data_type=int)
+        elif param_id in (_TERMINAL_PARAMS["BYTE"] + _TERMINAL_PARAMS["BYTE[4]"]):
+            return getattr(self, "__parse_" + _param_id_hex)(param_value)
+        elif param_id in _TERMINAL_PARAMS["BYTE[8]"]:
+            return self.__parse_0x0110(param_value)
+        elif param_id in (0x005D, 0x0064, 0x0065):
+            return getattr(self, "__parse_" + _param_id_hex)(param_value)
+        else:
+            return self.__parse_hex(param_value)
+
+    def set_params(self, param_id, *param_values):
         """Terminal param init
 
         Args:
@@ -275,8 +293,8 @@ class TerminalParams(object):
                     0x0102 - CAN bus channel 2 acquisition time interval. unit: ms, 0 - not collect.
 
                     -- JTT808-2013
-                    0x0108 - Server TCP port.
-                    0x0109 - Server UDP port.
+                    0x0018 - Server TCP port.
+                    0x0019 - Server UDP port.
 
                 WORD:
                     0x0031 - Electronic fence radius(Illegal displacement threshold). unit: meter
@@ -287,41 +305,62 @@ class TerminalParams(object):
                     0x0082 - The city id where the vehicle is located
                     0x0101 - CAN bus channel 1 upload time interval. unit: s, 0 - not upload.
                     0x0103 - CAN bus channel 2 upload time interval. unit: s, 0 - not upload.
-
-            parse(bool): True: value is hex, to parse, False: value is int, to hex. (default: {False})
+            param_values(tuple): param values
         """
-        self.__parse = parse
-        self.__param_id = param_id
-        self.__param_id_hex = "0x" + str_fill(hex(param_id)[2:], target_len=4)
-        if self.__parse is False:
-            if self.__param_id in (_TERMINAL_PARAMS["BYTE"] + _TERMINAL_PARAMS["BYTE[4]"]):
-                self.convert = getattr(self, "__convert_" + self.__param_id_hex)
-            elif self.__param_id in _TERMINAL_PARAMS["BYTE[8]"]:
-                self.convert = self.__convert_0x0110
-            elif self.__param_id in (0x005D, 0x0064, 0x0065):
-                self.convert = getattr(self, "__convert_" + self.__param_id_hex)
+        try:
+            _param_id_hex = "0x" + str_fill(hex(param_id)[2:], target_len=4)
+            if param_id in (_TERMINAL_PARAMS["BYTE"] + _TERMINAL_PARAMS["BYTE[4]"]):
+                hex_value = getattr(self, "__convert_" + _param_id_hex)(*param_values)
+            elif param_id in _TERMINAL_PARAMS["BYTE[8]"]:
+                hex_value = self.__convert_0x0110(*param_values)
+            elif param_id in (0x005D, 0x0064, 0x0065):
+                hex_value = getattr(self, "__convert_" + _param_id_hex)(*param_values)
+            elif param_id in _TERMINAL_PARAMS["STRING"]:
+                hex_value = self.__convert_hex(param_values[0], data_type=str, length=0)
+            elif param_id in _TERMINAL_PARAMS["DWORD"]:
+                hex_value = self.__convert_hex(param_values[0], data_type=int, length=8)
+            elif param_id in _TERMINAL_PARAMS["WORD"]:
+                hex_value = self.__convert_hex(param_values[0], data_type=int, length=4)
             else:
-                self.convert = self.__convert_fun
-        else:
-            self.convert = self.__parse_fun
+                hex_value = self.__convert_hex(param_values[0], data_type=type(param_values[0]), length=0)
 
-    def __convert_fun(self, value):
-        """Format reservation terminal param
+            self.__param_info[param_id] = {
+                "value": param_values if len(param_values) > 1 else param_values[0],
+                "hex": hex_value
+            }
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
-        Args:
-            value(int/str): reservation terminal param value
+    def get_params(self):
+        """Get all params info
 
         Returns:
-            string: format value
+            dict:
+                key(int): param id
+                value(dict): param value and hex value
+                    value(int/str): int/str param value
+                    hex(str): param value be converted to hex
         """
-        if self.__param_id in _TERMINAL_PARAMS["STRING"]:
-            return self.__convert_hex(value, data_type=str, length=0)
-        elif self.__param_id in _TERMINAL_PARAMS["DWORD"]:
-            return self.__convert_hex(value, data_type=int, length=8)
-        elif self.__param_id in _TERMINAL_PARAMS["WORD"]:
-            return self.__convert_hex(value, data_type=int, length=4)
-        else:
-            return self.__convert_hex(value, data_type=type(value), length=0)
+        return self.__param_info
+
+    def del_params(self, param_id):
+        """Delete exists param data by param id
+
+        Args:
+            param_id(int): param id
+
+        Returns:
+            bool: True - success, False - falied.
+        """
+        try:
+            if self.__param_info.get(param_id):
+                self.__param_info.pop(param_id)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def __convert_hex(self, value, data_type=int, length=0):
         """Format terminal param value to hex.
@@ -352,20 +391,6 @@ class TerminalParams(object):
                 return str_fill(ubinascii.hexlify(str(value).encode("gbk")).decode("gbk"), target_len=length).upper()
         else:
             raise TypeError("data_type is int or str, not %s" % data_type.__name__)
-
-    def __parse_fun(self, value):
-        if self.__param_id in _TERMINAL_PARAMS["STRING"]:
-            return self.__parse_hex(value, data_type=str)
-        elif self.__param_id in (_TERMINAL_PARAMS["DWORD"] + _TERMINAL_PARAMS["WORD"]):
-            return self.__parse_hex(value, data_type=int)
-        elif self.__param_id in (_TERMINAL_PARAMS["BYTE"] + _TERMINAL_PARAMS["BYTE[4]"]):
-            return getattr(self, "__parse_" + self.__param_id_hex)(value)
-        elif self.__param_id in _TERMINAL_PARAMS["BYTE[8]"]:
-            return self.__parse_0x0110(value)
-        elif self.__param_id in (0x005D, 0x0064, 0x0065):
-            return getattr(self, "__parse_" + self.__param_id_hex)(value)
-        else:
-            return self.__parse_hex(value)
 
     def __parse_hex(self, value, data_type=int):
         """Parse terminal param value from hex.
@@ -835,7 +860,7 @@ class LocStatusConfig(object):
         Returns:
             string: location value format by hex
         """
-        return str_fill(hex(self.__loc_status)[2:], target_len=8)
+        return self.__loc_status
 
 
 class LocAlarmWarningConfig(object):
@@ -912,51 +937,105 @@ class LocAlarmWarningConfig(object):
 
     def __init__(self):
         self.__flag_bit = 0b0
+        self.__shield_switch = 0b0
+        self.__sms_switch = 0b0
+        self.__shoot_switch = 0b0
+        self.__shoot_store = 0xFFFF
+        self.__key_sign = 0b0
 
-    def __get_flag(self, offset):
+    def __get_alarm_cfg(self, offset):
         """Get Alarm Warning Flag
 
         Args:
-            int: 1 - alarm, 0 - clear alarm
-        """
-        return (self.__flag_bit & (0b1 << offset)) >> offset
+            offset(int): alarm offset
 
-    def __set_flag(self, value, offset):
+        Returns:
+            tuple: (onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign)
+                onoff(int): 0 - off, 1 - on
+                shield_switch(int): 0 - off, 1 - on
+                sms_switch(int): 0 - off, 1 - on
+                shoot_switch(int): 0 - off, 1 - on
+                shoot_store(int): 0 - live upload, 1 - local store
+                key_sign(int): 0 - not key alarm, 1 - key alarm
+        """
+        onoff = (self.__flag_bit & (0b1 << offset)) >> offset
+        shield_switch = (self.__shield_switch & (0b1 << offset)) >> offset
+        sms_switch = (self.__sms_switch & (0b1 << offset)) >> offset
+        shoot_switch = (self.__shoot_switch & (0b1 << offset)) >> offset
+        shoot_store = (self.__shoot_store & (0b1 << offset)) >> offset
+        key_sign = (self.__key_sign & (0b1 << offset)) >> offset
+
+        return (onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign)
+
+    def __set_alarm_cfg(self, offset, onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign):
         """Set Alarm Warning Flag
 
         Args:
-            value(int): 1 or 0
             offset(int): `_offset.{flag_type}`
+            onoff(int): 0 - off, 1 - on
+            shield_switch(int): 0 - off, 1 - on
+            sms_switch(int): 0 - off, 1 - on
+            shoot_switch(int): 0 - off, 1 - on
+            shoot_store(int): 0 - live upload, 1 - local store
+            key_sign(int): 0 - not key alarm, 1 - key alarm
 
         Returns:
             bool: True - success, False - Failed
         """
         try:
-            if value == 1:
+            if onoff == 1:
                 self.__flag_bit |= (0b1 << offset)
             else:
                 self.__flag_bit ^= (self.__flag_bit & (0b1 << offset))
+            if shield_switch == 1:
+                self.__shield_switch |= (0b1 << offset)
+            else:
+                self.__shield_switch ^= (self.__shield_switch & (0b1 << offset))
+            if sms_switch == 1:
+                self.__sms_switch |= (0b1 << offset)
+            else:
+                self.__sms_switch ^= (self.__sms_switch & (0b1 << offset))
+            if shoot_switch == 1:
+                self.__shoot_switch |= (0b1 << offset)
+            else:
+                self.__shoot_switch ^= (self.__shoot_switch & (0b1 << offset))
+            if shoot_store == 1:
+                self.__shoot_store |= (0b1 << offset)
+            else:
+                self.__shoot_store ^= (self.__shoot_store & (0b1 << offset))
+            if key_sign == 1:
+                self.__key_sign |= (0b1 << offset)
+            else:
+                self.__key_sign ^= (self.__key_sign & (0b1 << offset))
             return True
         except:
             return False
 
-    def set_alarm(self, name, onoff):
+    def set_alarm(self, name, onoff=0, shield_switch=0, sms_switch=0, shoot_switch=0, shoot_store=1, key_sign=0):
         """Set alarm status
 
         Args:
             name(str): alarm name
-            onoff(int): 0 - off alarm, 1 - on alarm
+            onoff(int): 0 - off, 1 - on (default: {0})
+            shield_switch(int): 0 - off, 1 - on (default: {0})
+            sms_switch(int): 0 - off, 1 - on (default: {0})
+            shoot_switch(int): 0 - off, 1 - on (default: {0})
+            shoot_store(int): 0 - live upload, 1 - local store (default: {1})
+            key_sign(int): 0 - not key alarm, 1 - key alarm (default: {0})
 
         Returns:
             bool: True - success, False - Failed
 
         Raises:
-            TypeError: if alarm is not exist, raise error.
+            ValueError: if alarm is not exist, raise error.
         """
         if hasattr(self._alarm_flag_offset, name):
-            return self.__set_flag(onoff, getattr(self._alarm_flag_offset, name))
+            return self.__set_alarm_cfg(
+                getattr(self._alarm_flag_offset, name), onoff, shield_switch, sms_switch,
+                shoot_switch, shoot_store, key_sign
+            )
         else:
-            raise TypeError("Alarm %s is not exists." % name)
+            raise ValueError("Alarm %s is not exists." % name)
 
     def get_alarm(self, name):
         """Get alarm status
@@ -965,23 +1044,35 @@ class LocAlarmWarningConfig(object):
             name(str): alarm name
 
         Returns:
-            int: 0 - off alarm, 1 - on alarm
+            tuple: (onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign)
+                onoff(int): 0 - off, 1 - on
+                shield_switch(int): 0 - off, 1 - on
+                sms_switch(int): 0 - off, 1 - on
+                shoot_switch(int): 0 - off, 1 - on
+                shoot_store(int): 0 - live upload, 1 - local store
+                key_sign(int): 0 - not key alarm, 1 - key alarm
 
         Raises:
-            TypeError: if alarm is not exist, raise error.
+            ValueError: if alarm name is not exist, raise error.
         """
         if hasattr(self._alarm_flag_offset, name):
-            return self.__get_flag(hasattr(self._alarm_flag_offset, name))
+            return self.__get_alarm_cfg(hasattr(self._alarm_flag_offset, name))
         else:
-            raise TypeError("Alarm %s is not exists." % name)
+            raise ValueError("Alarm %s is not exists." % name)
 
     def value(self):
-        """Get alarm warning flag bit value
+        """Get all alarm warning config value
 
         Returns:
-            string: alarm warning flag bit value by hex
+            tuple: (alarm_onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign)
+                alarm_onoff(int): alarm onoff
+                shield_switch(int): alarm shield switch
+                sms_switch(int): alarm sms switch
+                shoot_switch(int): alarm shoot switch
+                shoot_store(int): alarm shoot store
+                key_sign(int): alarm key sign
         """
-        return str_fill(hex(self.__flag_bit)[2:], target_len=8)
+        return (self.__flag_bit, self.__shield_switch, self.__sms_switch, self.__shoot_switch, self.__shoot_store, self.__key_sign)
 
 
 class LocAdditionalInfoConfig(object):
@@ -996,7 +1087,12 @@ class LocAdditionalInfoConfig(object):
         Args:
             value(float): unit: km/h, Accurate to 0.1
         """
-        self.additional_info[0x01] = str_fill(hex(int(value * 10))[2:], target_len=8)
+        try:
+            self.additional_info[0x01] = str_fill(hex(int(value * 10))[2:], target_len=8)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+        return False
 
     def get_mileage(self):
         """Get odometer reading
@@ -1014,9 +1110,14 @@ class LocAdditionalInfoConfig(object):
         Args:
             value(float): unit: L, Accurate to 0.1
         """
-        self.additional_info[0x02] = str_fill(hex(int(value * 10))[2:], target_len=4)
+        try:
+            self.additional_info[0x02] = str_fill(hex(int(value * 10))[2:], target_len=4)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
-    def get_old_quantity(self):
+    def get_oil_quantity(self):
         """Get Fuel gauge reading
 
         Returns:
@@ -1032,7 +1133,12 @@ class LocAdditionalInfoConfig(object):
         Args:
             value(float): unit: km/h, Accurate to 0.1
         """
-        self.additional_info[0x03] = str_fill(hex(int(value * 10))[2:], target_len=4)
+        try:
+            self.additional_info[0x03] = str_fill(hex(int(value * 10))[2:], target_len=4)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_speed(self):
         """Get the speed of form record function acquisition.
@@ -1050,7 +1156,12 @@ class LocAdditionalInfoConfig(object):
         Args:
             value(int): alarm event id
         """
-        self.additional_info[0x04] = str_fill(hex(value)[2:], target_len=4)
+        try:
+            self.additional_info[0x04] = str_fill(hex(value)[2:], target_len=4)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_manually_confirm_the_alarm_event_id(self):
         """Get manually confirm the alarm event id.
@@ -1096,7 +1207,12 @@ class LocAdditionalInfoConfig(object):
         Args:
             value(int): temperature
         """
-        self.additional_info[0x06] = str_fill(bin(int(bin(value & 0xFFFF), 2))[2:], target_len=4)
+        try:
+            self.additional_info[0x06] = str_fill(bin(int(bin(value & 0xFFFF), 2))[2:], target_len=4)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_temperature(self):
         """Get cabin temperature
@@ -1123,9 +1239,17 @@ class LocAdditionalInfoConfig(object):
                 4 - road section
             area_segment_id(int): no this value if loc_type is 0.
         """
-        self.additional_info[0x11] = str_fill(hex(loc_type)[2:], target_len=2)
-        if loc_type != 0:
-            self.additional_info[0x11] += str_fill(hex(area_segment_id)[2:], target_len=8)
+        try:
+            self.additional_info[0x11] = str_fill(hex(loc_type)[2:], target_len=2)
+            if loc_type != 0:
+                if area_segment_id is not None:
+                    self.additional_info[0x11] += str_fill(hex(area_segment_id)[2:], target_len=8)
+                else:
+                    raise ValueError("area_segment_id is not exists.")
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_over_speed_alarm(self):
         """Get over speed alarm
@@ -1158,9 +1282,14 @@ class LocAdditionalInfoConfig(object):
                 0 - in
                 1 - out
         """
-        self.additional_info[0x12] = str_fill(hex(loc_type)[2:], target_len=2)
-        self.additional_info[0x12] += str_fill(hex(area_segment_id)[2:], target_len=8)
-        self.additional_info[0x12] += str_fill(hex(direction)[2:], target_len=2)
+        try:
+            self.additional_info[0x12] = str_fill(hex(loc_type)[2:], target_len=2)
+            self.additional_info[0x12] += str_fill(hex(area_segment_id)[2:], target_len=8)
+            self.additional_info[0x12] += str_fill(hex(direction)[2:], target_len=2)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_in_out_area_segment_alarm(self):
         """Get in out area or segment alarm
@@ -1189,9 +1318,14 @@ class LocAdditionalInfoConfig(object):
                 0 - insufficient
                 1 - too long
         """
-        self.additional_info[0x13] = str_fill(hex(road_id)[2:], target_len=8)
-        self.additional_info[0x13] += str_fill(hex(travel_time)[2:], target_len=4)
-        self.additional_info[0x13] += str_fill(hex(result)[2:], target_len=2)
+        try:
+            self.additional_info[0x13] = str_fill(hex(road_id)[2:], target_len=8)
+            self.additional_info[0x13] += str_fill(hex(travel_time)[2:], target_len=4)
+            self.additional_info[0x13] += str_fill(hex(result)[2:], target_len=2)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_insufficient_or_too_long_driving_time(self):
         """Get Insufficient or too long driving time
@@ -1210,7 +1344,7 @@ class LocAdditionalInfoConfig(object):
             data["result"] = int(alarm_info[12:], 16)
         return data
 
-    def set_vehicle_signal_status(self, low_beam_lights, high_beam, left_turn, right_turn, brake, reverse,
+    def set_vehicle_signal_status(self, low_beam_lights, high_beam, right_turn, left_turn, brake, reverse,
                                   fog_light, position, horn, air_conditioning, neutral, retarder, abs_work,
                                   heating, clutch):
         """Set vehicle signal status
@@ -1218,8 +1352,8 @@ class LocAdditionalInfoConfig(object):
         Args:
             low_beam_lights(int): 0 - off, 1 - on
             high_beam(int): 0 - off, 1 - on
-            left_turn(int): 0 - off, 1 - on
             right_turn(int): 0 - off, 1 - on
+            left_turn(int): 0 - off, 1 - on
             brake(int): 0 - off, 1 - on
             reverse(int): 0 - off, 1 - on
             fog_light(int): 0 - off, 1 - on
@@ -1232,15 +1366,20 @@ class LocAdditionalInfoConfig(object):
             heating(int): 0 - off, 1 - on
             clutch(int): 0 - off, 1 - on
         """
-        self.additional_info[0x25] = "0" * 17
-        args = [
-            low_beam_lights, high_beam, left_turn, right_turn, brake, reverse,
-            fog_light, position, horn, air_conditioning, neutral, retarder, abs_work,
-            heating, clutch
-        ]
-        args.reverse()
-        self.additional_info[0x25] += ("{}" * 15).format(*args)
-        self.additional_info[0x25] = str_fill(hex(int(self.additional_info[0x25], 2))[2:], target_len=8)
+        try:
+            self.additional_info[0x25] = "0" * 17
+            args = [
+                low_beam_lights, high_beam, right_turn, left_turn, brake, reverse,
+                fog_light, position, horn, air_conditioning, neutral, retarder, abs_work,
+                heating, clutch
+            ]
+            args.reverse()
+            self.additional_info[0x25] += ("{}" * 15).format(*args)
+            self.additional_info[0x25] = str_fill(hex(int(self.additional_info[0x25], 2))[2:], target_len=8)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_vehicle_signal_status(self):
         """Get vehicle signal status
@@ -1295,8 +1434,13 @@ class LocAdditionalInfoConfig(object):
             deep_sleep(int): 0 - off, 1 - on
             sleep(int): 0 - off, 1 - on
         """
-        self.additional_info[0x2A] = "0" * 14 + "{}{}".format(sleep, deep_sleep)
-        self.additional_info[0x2A] = str_fill(hex(int(self.additional_info[0x2A], 2))[2:], target_len=4)
+        try:
+            self.additional_info[0x2A] = "0" * 14 + "{}{}".format(sleep, deep_sleep)
+            self.additional_info[0x2A] = str_fill(hex(int(self.additional_info[0x2A], 2))[2:], target_len=4)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_io_status(self):
         """Get IO status
@@ -1322,9 +1466,14 @@ class LocAdditionalInfoConfig(object):
             ad0(int): AD0
             ad1(int): AD1
         """
-        ad0 = str_fill(hex(ad0)[2:], target_len=2)
-        ad1 = str_fill(hex(ad1)[2:], target_len=2)
-        self.additional_info[0x2B] = "{}{}".format(ad1, ad0)
+        try:
+            ad0 = str_fill(hex(ad0)[2:], target_len=2)
+            ad1 = str_fill(hex(ad1)[2:], target_len=2)
+            self.additional_info[0x2B] = "{}{}".format(ad1, ad0)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_analog(self):
         """Get analog
@@ -1346,7 +1495,12 @@ class LocAdditionalInfoConfig(object):
         Args:
             value(int): strength
         """
-        self.additional_info[0x30] = str_fill(hex(value)[2:], target_len=2)
+        try:
+            self.additional_info[0x30] = str_fill(hex(value)[2:], target_len=2)
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def get_wireless_communication_network_signal_strength(self):
         """Get wireless communication network signal strength
@@ -1403,13 +1557,14 @@ class JTMessage(object):
         global _protocol_version
         global _client_id
         global _version
-        global _encryption
 
         self.__jtt808_version = _jtt808_version
         self.__protocol_version = _protocol_version
         self.__client_id = _client_id
         self.__version = _version
-        self.__encryption = _encryption
+        self.__encryption = False
+        self.__server_pub_rsa_e = None
+        self.__server_pub_rsa_n = None
 
         self.__properties = 0b0000000000000000
         if self.__version:
@@ -1421,10 +1576,11 @@ class JTMessage(object):
 
         self.__message_id = 0x0000
         self.__serial_no = 0
+        self.__serial_no_obj = _serial_no_obj
         self.__package_total = 0
         self.__package_no = 0
 
-        self.__header = ""
+        self.__header = None
         self.__body = ""
         self.__check_code = ""
 
@@ -1436,7 +1592,7 @@ class JTMessage(object):
         self.__body_data = {}
 
     def __splice_header(self, **kwargs):
-        return "{message_id}{properties}{version}{client_id}{serial_no}{package_total}{package_no}".format(**kwargs)
+        return (int(kwargs["serial_no"], 16), "{message_id}{properties}{version}{client_id}{serial_no}{package_total}{package_no}".format(**kwargs))
 
     def __init_check_code(self, header, body):
         message = "{header}{body}".format(header=header, body=body)
@@ -1480,6 +1636,19 @@ class JTMessage(object):
     def get_encryption(self):
         return (self.__properties & self.__encryption_) >> 10
 
+    def set_excryption(self, encryption=False, e=None, n=None):
+        try:
+            self.__encryption = encryption
+            self.__properties = self.__properties ^ (self.__properties & self.__encryption_) | (self.__encryption << 10)
+            if encryption and (not e or not n):
+                raise ValueError("encryption is True, e and n must exist.")
+            self.__server_pub_rsa_e = e
+            self.__server_pub_rsa_n = n
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
+
     def is_subpackage(self):
         return (self.__properties & self.__subpackage_) == self.__subpackage_
 
@@ -1505,7 +1674,6 @@ class JTMessage(object):
             "message_id": str_fill(hex(self.__message_id)[2:], target_len=4),
             "version": str_fill(hex(self.__protocol_version)[2:], target_len=2) if self.__protocol_version else self.__protocol_version,
             "client_id": self.__client_id,
-            "serial_no": str_fill(hex(self.__serial_no)[2:], target_len=4),
             "package_total": "",
             "package_no": "",
         }
@@ -1513,9 +1681,10 @@ class JTMessage(object):
         if self.is_subpackage() and self.__bodys:
             # Init properties
             for package_no in self.__bodys.keys():
-                body_len = int(self.__bodys[package_no] / 2)
+                body_len = int(len(self.__bodys[package_no]) / 2)
                 self.set_body_len(body_len)
                 kwargs.update({
+                    "serial_no": str_fill(hex(self.__serial_no_obj.get_serial_no())[2:], target_len=4),
                     "properties": str_fill(hex(self.__properties)[2:], target_len=4),
                     "package_total": str_fill(hex(self.__package_total)[2:], target_len=4),
                     "package_no": str_fill(hex(package_no)[2:], target_len=4),
@@ -1525,36 +1694,37 @@ class JTMessage(object):
             self.set_body_len(int(len(self.__body) / 2))
             kwargs.update({
                 "properties": str_fill(hex(self.__properties)[2:], target_len=4),
+                "serial_no": str_fill(hex(self.__serial_no_obj.get_serial_no())[2:], target_len=4),
             })
             self.__header = self.__splice_header(**kwargs)
 
     def init_check_code(self):
         if self.is_subpackage() and self.__bodys:
             for package_no in self.__bodys.keys():
-                header = self.__headers[package_no]
+                header = self.__headers[package_no][1]
                 body = self.__bodys[package_no]
                 self.__check_codes[package_no] = self.__init_check_code(header, body)
         else:
-            self.__check_code = self.__init_check_code(self.__header, self.__body)
+            self.__check_code = self.__init_check_code(self.__header[1], self.__body)
 
     def message(self):
         # Init body
         self.body_to_hex()
-        # subcontract body
-        # self.body_subcontract()
         # encrypt body
         self.rsa_encryption()
+        # subcontract body
+        self.body_subcontract()
         # Init header
         self.header_to_hex()
         # Init check code
         self.init_check_code()
 
         if self.is_subpackage() and self.__bodys:
-            msgs = [self.__message_to_hex(self.__headers[package_no], self.__bodys[package_no], self.__check_codes[package_no]) for package_no in self.__bodys.keys()]
+            msgs = [(self.__headers[package_no][0], self.__message_to_hex(self.__headers[package_no][1], self.__bodys[package_no], self.__check_codes[package_no])) for package_no in self.__bodys.keys()]
             return msgs
         else:
-            msg = self.__message_to_hex(self.__header, self.__body, self.__check_code)
-            return msg
+            msg = self.__message_to_hex(self.__header[1], self.__body, self.__check_code)
+            return [(self.__header[0], msg)]
 
     def set_body(self, body):
         self.__body = body
@@ -1586,6 +1756,8 @@ class JTMessage(object):
                 end_num = (i + 1) * subpkg_len * 2
                 if self.__body[start_num:end_num]:
                     self.__bodys[i] = self.__body[start_num:end_num]
+        logger.debug("is_subpackage: %s" % self.is_subpackage())
+        logger.debug("__bodys: %s" % self.__bodys)
 
     def body_to_hex(self):
         pass
@@ -1595,11 +1767,25 @@ class JTMessage(object):
 
     def rsa_encryption(self):
         if self.get_encryption():
-            pass
+            logger.debug("body before rsa_encryption:\n%s" % self.__body)
+            body_bytes = bytearray(ubinascii.unhexlify(self.__body))
+            if len(body_bytes) / 100 <= 1:
+                self.__body = ubinascii.hexlify(
+                    rsa.encrypt(ubinascii.unhexlify(self.__body), self.__server_pub_rsa_n, hex(self.__server_pub_rsa_e)[2:])
+                ).decode()
+            else:
+                bodys = []
+                for i in range(0, int(len(body_bytes) / 100) + 1, 100):
+                    if body_bytes[i:i + 100]:
+                        _body_encrypt = ubinascii.hexlify(rsa.encrypt(body_bytes[i:i + 100].decode()))
+                        bodys.append(_body_encrypt)
+                self.__body = "".join(bodys)
+                self.set_subpackage(True, len(bodys))
+            logger.debug("body after rsa_encryption:\n%s" % self.__body)
 
     def rsa_decryption(self):
         if self.get_encryption():
-            pass
+            self.__body = ubinascii.hexlify(rsa.decrypt(ubinascii.unhexlify(self.__body))).decode()
 
 
 class JTMessageParse(JTMessage):
@@ -1680,6 +1866,7 @@ class JTMessageParse(JTMessage):
             self.__check_code_check()
             self.__parse_header()
             self.__parse_body()
+            self.rsa_decryption()
             return True
         return False
 
@@ -1993,7 +2180,7 @@ class T8103(JTMessage):
             param_id = int(param_body[:8], 16)
             param_len = int(param_body[8:10], 16)
             param_value = param_body[10:param_len * 2]
-            real_value = TerminalParams(param_id, parse=True).convert(param_value)
+            real_value = TerminalParams().parse(param_id, param_value)
             params.append((param_id, real_value))
             param_body = param_body[param_len * 2:]
         self.__body_data = {
@@ -2092,13 +2279,13 @@ class T8105(JTMessage):
                 dial_point_name(str): dial point name (default: "")
                 dial_user_name(str): dial user name (default: "")
                 dial_password(str): dial password (default: "")
-                addr: ip or domain (default: "")
-                tcp_port: TCP port (default: "")
-                udp_port: UDP port (default: "")
-                manufacturer_id: manufacturer id (default: "")
-                hardware_version: hardware version (default: "")
-                firmware_version: firmware version (default: "")
-                conn_timeout: Time limit for connecting to the server, unit: minutes (default: "")
+                addr(str): ip or domain (default: "")
+                tcp_port(str): TCP port (default: "")
+                udp_port(str): UDP port (default: "")
+                manufacturer_id(str): manufacturer id (default: "")
+                hardware_version(str): hardware version (default: "")
+                firmware_version(str): firmware version (default: "")
+                conn_timeout(str): Time limit for connecting to the server, unit: minutes (default: "")
 
             cmd_word -- 2:
                 conn_ctrl(int): connection control (default: "")
@@ -2108,10 +2295,10 @@ class T8105(JTMessage):
                 dial_point_name(str): dial point name (default: "")
                 dial_user_name(str): dial user name (default: "")
                 dial_password(str): dial password (default: "")
-                addr: ip or domain (default: "")
-                tcp_port: TCP port (default: "")
-                udp_port: UDP port (default: "")
-                conn_timeout: Time limit for connecting to the server, unit: minutes (default: "")
+                addr(str): ip or domain (default: "")
+                tcp_port(str): TCP port (default: "")
+                udp_port(str): UDP port (default: "")
+                conn_timeout(str): Time limit for connecting to the server, unit: minutes (default: "")
         """
         cmd_word = int(self.__body[:2], 16)
         cmd_param = ""
@@ -2290,7 +2477,7 @@ class T8108(JTMessage):
         terminal_firmware_verion_len = int(self.__body[12:14], 16)
         terminal_firmware_verion = ubinascii.unhexlify(self.__body[14:(terminal_firmware_verion_len * 2 + 14)].encode("gbk")).decode("gbk")
         upgrade_package_len = int(self.__body[(terminal_firmware_verion_len * 2 + 14):(terminal_firmware_verion_len * 2 + 22)], 16)
-        upgrade_package = ubinascii.unhexlify(self.__body[(terminal_firmware_verion_len * 2 + 22):(terminal_firmware_verion_len * 2 + 22 + upgrade_package_len * 2)].encode("gbk")).decode("gbk")
+        upgrade_package = ubinascii.unhexlify(self.__body[(terminal_firmware_verion_len * 2 + 22):(terminal_firmware_verion_len * 2 + 22 + upgrade_package_len * 2)].encode("gbk"))
         self.__body_data = {
             "upgrade_type": upgrade_type,
             "manufacturer_id": manufacturer_id,
@@ -2342,8 +2529,8 @@ class T0200(JTMessage):
     def set_params(self, alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time, loc_additional_info):
         """
         Args:
-            alarm_flag(str): LocAlarmWarningConfig().value()
-            loc_status(str): LocStatusConfig().value()
+            alarm_flag(int): LocAlarmWarningConfig().value()[0]
+            loc_status(int): LocStatusConfig().value()
             latitude(float): latitude
             longitude(float): longitude
             altitude(int): unit: meter
@@ -2352,8 +2539,8 @@ class T0200(JTMessage):
             time(str): GMT+8, format: YYMMDDhhmmss
             loc_additional_info(str): LocAdditonalInfoConfig().value()
         """
-        self.__alarm_flag = alarm_flag
-        self.__loc_status = loc_status
+        self.__alarm_flag = str_fill(hex(alarm_flag)[2:], target_len=8)
+        self.__loc_status = str_fill(hex(loc_status)[2:], target_len=8)
         self.__latitude = str_fill(hex(int(latitude * (10 ** 6)))[2:], target_len=8)
         self.__longitude = str_fill(hex(int(longitude * (10 ** 6)))[2:], target_len=8)
         self.__altitude = str_fill(hex(int(altitude))[2:], target_len=4)
@@ -2396,8 +2583,8 @@ class T0201(JTMessage):
         """
         Args:
             response_serial_no(int): 0x8201 serial no.
-            alarm_flag(str): LocAlarmWarningConfig().value()
-            loc_status(str): LocStatusConfig().value()
+            alarm_flag(int): LocAlarmWarningConfig().value()[0]
+            loc_status(int): LocStatusConfig().value()
             latitude(float): latitude
             longitude(float): longitude
             altitude(int): unit: meter
@@ -2407,8 +2594,8 @@ class T0201(JTMessage):
             loc_additional_info(str): LocAdditonalInfoConfig().value()
         """
         self.__response_serial_no = str_fill(hex(response_serial_no)[2:], target_len=4)
-        self.__alarm_flag = alarm_flag
-        self.__loc_status = loc_status
+        self.__alarm_flag = str_fill(hex(alarm_flag)[2:], target_len=8)
+        self.__loc_status = str_fill(hex(loc_status)[2:], target_len=8)
         self.__latitude = str_fill(hex(int(latitude * (10 ** 6)))[2:], target_len=8)
         self.__longitude = str_fill(hex(int(longitude * (10 ** 6)))[2:], target_len=8)
         self.__altitude = str_fill(hex(int(altitude))[2:], target_len=4)
@@ -2488,7 +2675,6 @@ class T8203(JTMessage):
         vehicle_illegal_displacement_alarm = int(alarm_type[-29])
         self.__body_data = {
             "alarm_msg_serial_no": alarm_msg_serial_no,
-            "alarm_type": alarm_type,
             "emergency_alarm": emergency_alarm,
             "hazard_alarm": hazard_alarm,
             "in_out_area_alarm": in_out_area_alarm,
@@ -2532,7 +2718,6 @@ class T8300(JTMessage):
         msg_type = int(self.__body[2:4], 16) if self.is_version() else 0
         message = ubinascii.unhexlify(self.__body[4 if self.is_version() else 2:]).decode("gbk")
         self.__body_data = {
-            "flag": flag,
             "flag_type": flag_type,
             "terminal_display": terminal_display,
             "terminal_tts_broadcast_and_read": terminal_tts_broadcast_and_read,
@@ -2614,7 +2799,7 @@ class T8302(JTMessage):
             flag(dict):
                 emergency(int): 0 - off, 1 - on
                 terminal_tts_broadcast_and_read(int): 0 - off, 1 - on
-                Advertising_screen_display(int): 0 - off, 1 - on
+                advertising_screen_display(int): 0 - off, 1 - on
             question_info(str): question infomation
             answers(list):
                 item(dict):
@@ -2624,7 +2809,7 @@ class T8302(JTMessage):
         flag = str_fill(bin(int(self.__body[:2], 16))[2:], target_len=8)
         emergency = int(flag[-1])
         terminal_tts_broadcast_and_read = int(flag[-4])
-        Advertising_screen_display = int(flag[-5])
+        advertising_screen_display = int(flag[-5])
         question_info_len = int(self.__body[2:4], 16)
         question_info = ubinascii.unhexlify(self.__body[4: 4 + question_info_len * 2]).decode("gbk")
         answers = []
@@ -2640,7 +2825,7 @@ class T8302(JTMessage):
             "flag": {
                 "emergency": emergency,
                 "terminal_tts_broadcast_and_read": terminal_tts_broadcast_and_read,
-                "Advertising_screen_display": Advertising_screen_display,
+                "advertising_screen_display": advertising_screen_display,
             },
             "question_info": question_info,
             "answers": answers,
@@ -3453,7 +3638,7 @@ class T8701(JTMessage):
             cmd_data(bytes): record file bytes data
         """
         cmd_word = int(self.__body[:2], 16)
-        cmd_data = ""
+        cmd_data = b""
         if self.__body[2:]:
             cmd_data = ubinascii.unhexlify(self.__body[2:])
         self.__body_data = {
@@ -3579,8 +3764,8 @@ class T0704(JTMessage):
     def set_loc_data(self, alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time, loc_additional_info):
         """
         Args:
-            alarm_flag(str): LocAlarmWarningConfig().value()
-            loc_status(str): LocStatusConfig().value()
+            alarm_flag(int): LocAlarmWarningConfig().value()[0]
+            loc_status(int): LocStatusConfig().value()
             latitude(float): latitude
             longitude(float): longitude
             altitude(int): unit: meter
@@ -3589,8 +3774,8 @@ class T0704(JTMessage):
             time(str): GMT+8, format: YYMMDDhhmmss
             loc_additional_info(str): LocAdditonalInfoConfig().value()
         """
-        self.__alarm_flag = alarm_flag
-        self.__loc_status = loc_status
+        self.__alarm_flag = str_fill(hex(alarm_flag)[2:], target_len=8)
+        self.__loc_status = str_fill(hex(loc_status)[2:], target_len=8)
         self.__latitude = str_fill(hex(int(latitude * (10 ** 6)))[2:], target_len=8)
         self.__longitude = str_fill(hex(int(longitude * (10 ** 6)))[2:], target_len=8)
         self.__altitude = str_fill(hex(int(altitude))[2:], target_len=4)
@@ -3770,8 +3955,8 @@ class T0801(JTMessage):
     def set_loc_data(self, alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time):
         """
         Args:
-            alarm_flag(str): LocAlarmWarningConfig().value()
-            loc_status(str): LocStatusConfig().value()
+            alarm_flag(int): LocAlarmWarningConfig().value()[0]
+            loc_status(int): LocStatusConfig().value()
             latitude(float): latitude
             longitude(float): longitude
             altitude(int): unit: meter
@@ -3779,8 +3964,8 @@ class T0801(JTMessage):
             direction(int): range: 0~359, 0 is true North, Clockwise.
             time(str): GMT+8, format: YYMMDDhhmmss
         """
-        self.__alarm_flag = alarm_flag
-        self.__loc_status = loc_status
+        self.__alarm_flag = str_fill(hex(alarm_flag)[2:], target_len=8)
+        self.__loc_status = str_fill(hex(loc_status)[2:], target_len=8)
         self.__latitude = str_fill(hex(int(latitude * (10 ** 6)))[2:], target_len=8)
         self.__longitude = str_fill(hex(int(longitude * (10 ** 6)))[2:], target_len=8)
         self.__altitude = str_fill(hex(int(altitude))[2:], target_len=4)
@@ -3991,8 +4176,8 @@ class T0802(JTMessage):
     def __format_loc_data(self, alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time):
         """
         Args:
-            alarm_flag(str): LocAlarmWarningConfig().value()
-            loc_status(str): LocStatusConfig().value()
+            alarm_flag(int): LocAlarmWarningConfig().value()[0]
+            loc_status(int): LocStatusConfig().value()
             latitude(float): latitude
             longitude(float): longitude
             altitude(int): unit: meter
@@ -4000,8 +4185,8 @@ class T0802(JTMessage):
             direction(int): range: 0~359, 0 is true North, Clockwise.
             time(str): GMT+8, format: YYMMDDhhmmss
         """
-        self.__alarm_flag = alarm_flag
-        self.__loc_status = loc_status
+        self.__alarm_flag = str_fill(hex(alarm_flag)[2:], target_len=8)
+        self.__loc_status = str_fill(hex(loc_status)[2:], target_len=8)
         self.__latitude = str_fill(hex(int(latitude * (10 ** 6)))[2:], target_len=8)
         self.__longitude = str_fill(hex(int(longitude * (10 ** 6)))[2:], target_len=8)
         self.__altitude = str_fill(hex(int(altitude))[2:], target_len=4)
@@ -4024,7 +4209,7 @@ class T0802(JTMessage):
         loc_data = str_fill(loc_data, target_len=56)
         return loc_data
 
-    def set_media(self, media_id, media_type, channel_id, event_id, loc_data):
+    def set_media(self, media_id, media_type, channel_id, event_code, loc_data):
         """
         Args:
             media_id(int): media id
@@ -4033,7 +4218,7 @@ class T0802(JTMessage):
                 1 - audio
                 2 - video
             channel_id(int): channel id
-            event_id(int):
+            event_code(int):
                 0 - Platform issues instructions
                 1 - timed action
                 2 - Robbery alarm triggered
@@ -4042,14 +4227,14 @@ class T0802(JTMessage):
                 5 - Close the door and take a photo
                 6 - Door from open to closed, Speed ​​from 20km to over 20km
                 7 - Take pictures at a fixed distance
-            loc_data(str): T0200.__body
+            loc_data(tuple): (alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time)
         """
         _media_id = str_fill(hex(media_id)[2:], target_len=8)
         _media_type = str_fill(hex(media_type)[2:], target_len=2)
         _channel_id = str_fill(hex(channel_id)[2:], target_len=2)
-        _event_id = str_fill(hex(event_id)[2:], target_len=2)
+        _event_code = str_fill(hex(event_code)[2:], target_len=2)
         _loc_data = self.__format_loc_data(*loc_data)
-        args = (_media_id, _media_type, _channel_id, _event_id, _loc_data)
+        args = (_media_id, _media_type, _channel_id, _event_code, _loc_data)
         _media_info = "{}{}{}{}{}".format(*args)
         self.__media_datas.append(_media_info)
 
@@ -4077,7 +4262,7 @@ class T8803(JTMessage):
                 1 - audio
                 2 - video
             channel_id(int): channel id
-            event_id(int):
+            event_code(int):
                 0 - Platform issues instructions
                 1 - timed action
                 2 - Robbery alarm triggered
@@ -4093,14 +4278,14 @@ class T8803(JTMessage):
         """
         media_type = int(self.__body[:2], 16)
         channel_id = int(self.__body[2:4], 16)
-        event_id = int(self.__body[4:6], 16)
+        event_code = int(self.__body[4:6], 16)
         start_time = self.__body[6:18]
         end_time = self.__body[18:30]
         delete_flag = int(self.__body[30:32], 16)
         self.__body_data = {
             "media_type": media_type,
             "channel_id": channel_id,
-            "event_id": event_id,
+            "event_code": event_code,
             "start_time": start_time,
             "end_time": end_time,
             "delete_flag": delete_flag,
@@ -4278,7 +4463,7 @@ class T0A00(JTMessage):
             n(str): n of terminal RAS public key {e, n}
         """
         self.__e = str_fill(hex(e)[2:], target_len=8)
-        self.__n = str_fill(hex(n)[2:], target_len=256)
+        self.__n = n
 
     def body_to_hex(self):
         kwargs = {

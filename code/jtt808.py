@@ -24,6 +24,7 @@
 @copyright :Copyright (c) 2022
 """
 
+import uos
 import ure
 import usys
 import utime
@@ -37,7 +38,6 @@ from usr.jt_message import DOWNLINK_MESSAGE, UPLINK_MESSAGE, JTMessageParse, set
 logger = getLogger(__name__)
 
 _socket_lock = _thread.allocate_lock()
-_serial_no_lock = _thread.allocate_lock()
 
 # These message ids's response is terminal general answer.
 GENERAL_ANSWER_MSG_ID = (
@@ -75,7 +75,7 @@ class SocketBase(Singleton):
         Raises:
             ValueError: Domain DNS parsing falied.
         """
-        if self.__domain is not None:
+        if self.__domain is not None and self.__domain:
             if self.__port is None:
                 self.__port == 8883 if self.__domain.startswith("https://") else 1883
             try:
@@ -326,7 +326,7 @@ class SocketBase(Singleton):
 class JTT808Base(SocketBase):
     """This class is base option for JTT808."""
 
-    def __init__(self, ip=None, port=None, domain=None, method="TCP", encrypted=False, timeout=30, retry_count=3,
+    def __init__(self, ip=None, port=None, domain=None, method="TCP", timeout=30, retry_count=3,
                  life_time=60, version="2019", client_id=""):
         """
         Args:
@@ -334,7 +334,6 @@ class JTT808Base(SocketBase):
             port: server port (default: {None})
             domain: server domain (default: {None})
             method: TCP or UDP (default: {"TCP"})
-            encrypted: Whether the message data is encrypted. (default: {False})
             timeout: socket read data timeout. (default: {30})
             retry_count: socket send data retry count. (default: {3})
             life_time: heart beat recycle time. (default: {60})
@@ -342,7 +341,7 @@ class JTT808Base(SocketBase):
             client_id: device sim phone number. (default: {""})
         """
         super().__init__(ip=ip, port=port, domain=domain, method=method)
-        set_jtmsg_config(jtt808_version=version, client_id=client_id, encryption=encrypted)
+        set_jtmsg_config(jtt808_version=version, client_id=client_id)
         self.__timeout = timeout
         self.__retry_count = retry_count
         self.__life_time = life_time
@@ -356,6 +355,9 @@ class JTT808Base(SocketBase):
         self.__heart_beat_is_running = False
         self.__iter_serial_no = iter(range(99999))
         self.__callback = None
+        self.__encryption = False
+        self.__rsa_e = None
+        self.__rsa_n = None
 
     def __read_response(self):
         """This function is downlink thread function.
@@ -397,6 +399,8 @@ class JTT808Base(SocketBase):
                             logger.error("message_id [%s] is not downlink message id" % header["message_id"])
                             continue
                         msg_obj = DOWNLINK_MESSAGE.get(header["message_id"])()
+                        if header["message_id"] == 0x8A00:
+                            msg_obj.set_excryption(False)
                         resp_body = jtmessageparse_obj.get_body()
                         logger.debug("__read_response resp_body: %s" % resp_body)
 
@@ -432,9 +436,10 @@ class JTT808Base(SocketBase):
                                         pass
                             else:
                                 if self.__callback:
+                                    # User to ack general_answer in callback for GENERAL_ANSWER_MSG_ID.
                                     _thread.start_new_thread(self.__callback, ({"header": header, "data": data},))
-                                # TODO: Not auto answer, user to ack general_answer in callback.
-                                if header["message_id"] in GENERAL_ANSWER_MSG_ID:
+                                else:
+                                    # If not set callback, than auto ack general_answer
                                     self.general_answer(header["serial_no"], header["message_id"])
 
                     message = bytearray(msgs[msg_indexs[-1]:]).decode().encode() if len(msg_indexs) % 2 != 0 else b""
@@ -551,11 +556,10 @@ class JTT808Base(SocketBase):
         """
         if self.status() == 0:
             up_msg_obj = UPLINK_MESSAGE[0x0002]()
-            serial_no = self.get_serial_no()
-            up_msg_obj.set_serial_no(serial_no)
-            data = up_msg_obj.message()
-            logger.debug("heart_beat data: %s" % data)
-            self.send(data, 0x8001, serial_no)
+            msgs = up_msg_obj.message()
+            for serial_no, data in msgs:
+                logger.debug("heart_beat data: %s" % data)
+                self.send(data, 0x8001, serial_no)
         else:
             self._heart_beat_timer_stop()
 
@@ -568,13 +572,12 @@ class JTT808Base(SocketBase):
                 item(int): loss packet id.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0005]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(source_serial_no, package_ids)
-        data = up_msg_obj.message()
-        logger.debug("__resend_subpackage data: %s" % data)
-        send_res = self.send(data, None, serial_no)
-        logger.debug("__resend_subpackage send res: %s" % send_res)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("__resend_subpackage data: %s" % data)
+            send_res = self.send(data, None, serial_no)
+            logger.debug("__resend_subpackage send res: %s" % send_res)
 
     def _downlink_thread_start(self):
         self.__read_thread = _thread.start_new_thread(self.__read_response, ())
@@ -606,18 +609,34 @@ class JTT808Base(SocketBase):
             return True
         return False
 
-    @option_lock(_serial_no_lock)
-    def get_serial_no(self):
-        """Get message serial number.
+    def set_encryption(self, encryption=False, rsa_e=None, rsa_n=None):
+        """Set server communication encryption
+
+        Args:
+            encryption(bool): True - encryption, False - not encryption (default: {False})
+            rsa_e(int): Server rsa public key e (default: {None})
+            rsa_n(str): Server rsa public key n (default: {None})
 
         Returns:
-            int: serial number
+            bool: True - success, False - Failed
+
+        Raises:
+            ValueError: rsa_e and rsa_n is required fields when encryption is True.
+            OSError: RSA private key file is not exist when encryption is True.
         """
         try:
-            return next(self.__iter_serial_no)
-        except StopIteration:
-            self.__iter_serial_no = iter(range(99999))
-            return self.get_serial_no()
+            self.__encryption = encryption
+            self.__rsa_e = rsa_e
+            self.__rsa_n = rsa_n
+            if encryption is True:
+                if not rsa_e or not rsa_n:
+                    raise ValueError("rsa_e and rsa_n is required fields when encryption is True.")
+                if "rsa_priv.txt" not in uos.listdir("/usr"):
+                    raise OSError("RSA private key file is not exist.")
+            return True
+        except Exception as e:
+            usys.print_exception(e)
+            return False
 
     def send(self, data, res_msg_id, serial_no):
         """Send data to server
@@ -630,6 +649,7 @@ class JTT808Base(SocketBase):
         Returns:
             dict: Return empty dict if not get server response, eles return server response data.
         """
+        resp_res = {}
         count = 0
         _timeout = self.__timeout * (count + 1)
         while count <= self.__retry_count:
@@ -646,29 +666,29 @@ class JTT808Base(SocketBase):
             else:
                 resp_res = send_res
                 break
+
         return resp_res
 
 
 class JTT808(JTT808Base):
     """This class is incloud terminal request for JTT808."""
 
-    def __init__(self, ip=None, port=None, domain=None, method="TCP", encrypted=False, timeout=30, retry_count=3,
+    def __init__(self, ip=None, port=None, domain=None, method="TCP", timeout=30, retry_count=3,
                  life_time=60, version="2019", client_id=""):
         """
         Args:
-            ip: server ip address (default: {None})
-            port: server port (default: {None})
-            domain: server domain (default: {None})
-            method: TCP or UDP (default: {"TCP"})
-            encrypted: Whether the message data is encrypted. (default: {False})
-            timeout: socket read data timeout. (default: {30})
-            retry_count: socket send data retry count. (default: {3})
-            life_time: heart beat recycle time. (default: {60})
-            version: jtt808 version (default: {"2019"})
-            client_id: device sim phone number. (default: {""})
+            ip(str): server ip address (default: {None})
+            port(int): server port (default: {None})
+            domain(str): server domain (default: {None})
+            method(str): TCP or UDP (default: {"TCP"})
+            timeout(int): socket read data timeout. (default: {30})
+            retry_count(int): socket send data retry count. (default: {3})
+            life_time(int): heart beat recycle time. (default: {60})
+            version(str): jtt808 version (default: {"2019"})
+            client_id(str): device sim phone number. (default: {""})
         """
         super().__init__(
-            ip=ip, port=port, domain=domain, method=method, encrypted=encrypted, timeout=timeout, retry_count=retry_count,
+            ip=ip, port=port, domain=domain, method=method, timeout=timeout, retry_count=retry_count,
             life_time=life_time, version=version, client_id=client_id
         )
 
@@ -684,10 +704,9 @@ class JTT808(JTT808Base):
             bool: True - success, False - failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0001]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(response_serial_no, response_msg_id, result_code)
-        data = up_msg_obj.message()
+        msgs = up_msg_obj.message()
+        serial_no, data = msgs[0]
         logger.debug("general_answer data: %s" % data)
         send_res = self.send(data, None, serial_no)
         logger.debug("general_answer send res: %s" % send_res)
@@ -702,9 +721,8 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0004]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
-        data = up_msg_obj.message()
+        msgs = up_msg_obj.message()
+        serial_no, data = msgs[0]
         logger.debug("query_server_time data: %s" % data)
         return self.send(data, 0x8004, serial_no)
 
@@ -733,10 +751,9 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0100]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(province_id, city_id, manufacturer_id, terminal_model, terminal_id, license_plate_color, license_plate)
-        data = up_msg_obj.message()
+        msgs = up_msg_obj.message()
+        serial_no, data = msgs[0]
         logger.debug("register data: %s" % data)
         send_res = self.send(data, 0x8100, serial_no)
         return send_res
@@ -762,10 +779,9 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0102]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(auth_code, imei, app_version)
-        data = up_msg_obj.message()
+        msgs = up_msg_obj.message()
+        serial_no, data = msgs[0]
         logger.debug("authentication data: %s" % data)
         send_res = self.send(data, 0x8001, serial_no)
         if send_res.get("result_code") == 0:
@@ -780,9 +796,8 @@ class JTT808(JTT808Base):
             bool: True - success, False - falied
         """
         up_msg_obj = UPLINK_MESSAGE[0x0003]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
-        data = up_msg_obj.message()
+        msgs = up_msg_obj.message()
+        serial_no, data = msgs[0]
         logger.debug("log_out data: %s" % data)
         send_res = self.send(data, None, serial_no)
         logger.debug("log_out send res: %s" % send_res)
@@ -800,7 +815,7 @@ class JTT808(JTT808Base):
             response_serial_no(int): server request serial number
             terminal_params(dict):
                 key: param id
-                value: param value from TerminalParams(param_id).convert(value)
+                value: param value from TerminalParams.get_params() data hex
 
         Returns:
             dict:
@@ -815,14 +830,19 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0104]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(response_serial_no)
         for param_id, param_value in terminal_params.items():
             up_msg_obj.set_terminal_params(param_id, param_value)
-        data = up_msg_obj.message()
-        logger.debug("params_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("params_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def properties_report(self, applicable_passenger_vehicles, applicable_to_dangerous_goods_vehicles,
                           applicable_to_ordinary_freight_vehicles, applicable_to_taxi, support_hard_disk_video,
@@ -871,17 +891,23 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0107]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(applicable_passenger_vehicles, applicable_to_dangerous_goods_vehicles,
                               applicable_to_ordinary_freight_vehicles, applicable_to_taxi, support_hard_disk_video,
                               machine_type, applicable_to_trailer, manufacturer_id, terminal_model, terminal_id,
                               iccid, hardware_version, firmware_version, support_gps, support_bds, support_glonass,
                               support_galileo, support_gprs, support_cdma, support_td_scdma, support_wcdma,
                               support_cdma2000, support_td_lte, support_other_communication)
-        data = up_msg_obj.message()
-        logger.debug("properties_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("properties_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def upgrade_result_report(self, upgrade_type, result_code):
         """Terminal upgrade result response
@@ -909,12 +935,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0108]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(upgrade_type, result_code)
-        data = up_msg_obj.message()
-        logger.debug("upgrade_result_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("upgrade_result_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def loction_report(self, response_msg_id, response_serial_no, alarm_flag, loc_status, latitude, longitude, altitude,
                        speed, direction, time, loc_additional_info):
@@ -958,12 +990,18 @@ class JTT808(JTT808Base):
             up_msg_obj = UPLINK_MESSAGE[0x0500]()
             params = (response_serial_no, alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time, loc_additional_info)
 
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(*params)
-        data = up_msg_obj.message()
-        logger.debug("loction_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("loction_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def event_report(self, event_id):
         """Event report
@@ -984,12 +1022,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0301]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(event_id)
-        data = up_msg_obj.message()
-        logger.debug("event_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("event_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def issue_question_response(self, response_serial_no, answer_id):
         """Issue a question response
@@ -1011,12 +1055,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0302]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(response_serial_no, answer_id)
-        data = up_msg_obj.message()
-        logger.debug("issue_question_response data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("issue_question_response data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def information_demand_cancellation(self, info_type, onoff):
         """Information on demand/cancellation
@@ -1040,12 +1090,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0303]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(info_type, onoff)
-        data = up_msg_obj.message()
-        logger.debug("information_demand_cancellation data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("information_demand_cancellation data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def query_area_route_data_response(self, query_type, data):
         """Query area or route data response
@@ -1076,12 +1132,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0608]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(query_type, data)
-        data = up_msg_obj.message()
-        logger.debug("query_area_route_data_response data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("query_area_route_data_response data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def driving_record_data_upload(self, response_serial_no, cmd_word, cmd_data):
         """Driving record data upload
@@ -1109,12 +1171,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0700]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(response_serial_no, cmd_word, cmd_data)
-        data = up_msg_obj.message()
-        logger.debug("driving_record_data_upload data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("driving_record_data_upload data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def electronic_waybill_report(self, data):
         """Electronic Waybill Reporting
@@ -1135,12 +1203,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0701]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(data)
-        data = up_msg_obj.message()
-        logger.debug("electronic_waybill_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("electronic_waybill_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def driver_identity_information_report(self, status, time, ic_read_result, driver_name, qualification_certificate_code,
                                            issuing_agency_name, certificate_validity, driver_id_number):
@@ -1176,13 +1250,19 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0702]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(status, time, ic_read_result, driver_name, qualification_certificate_code,
                               issuing_agency_name, certificate_validity, driver_id_number)
-        data = up_msg_obj.message()
-        logger.debug("driver_identity_information_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("driver_identity_information_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def location_bulk_report(self, data_type, loc_datas):
         """Bulk upload of positioning data
@@ -1216,14 +1296,20 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0704]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(data_type)
         for loc_data in loc_datas:
             up_msg_obj.set_loc_data(*loc_data)
-        data = up_msg_obj.message()
-        logger.debug("location_bulk_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("location_bulk_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def can_bus_data_upload(self, recive_time, can_datas):
         """CAN bus data upload
@@ -1257,16 +1343,22 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0705]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(recive_time)
         for can_data in can_datas:
             up_msg_obj.set_can_data(*can_data)
-        data = up_msg_obj.message()
-        logger.debug("can_bus_data_upload data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
 
-    def media_event_upload(self, media_id, media_type, media_encoding, event_id, channel_id):
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("can_bus_data_upload data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
+
+    def media_event_upload(self, media_id, media_type, media_encoding, event_code, channel_id):
         """Multimedia event information upload
 
         Args:
@@ -1281,7 +1373,7 @@ class JTT808(JTT808Base):
                 2 - MP3
                 3 - WAV
                 4 - WMV
-            event_id(int):
+            event_code(int):
                 0 - Platform issues instructions
                 1 - timed action
                 2 - Robbery alarm triggered
@@ -1305,14 +1397,20 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0800]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
-        up_msg_obj.set_params(media_id, media_type, media_encoding, event_id, channel_id)
-        data = up_msg_obj.message()
-        logger.debug("media_event_upload data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+        up_msg_obj.set_params(media_id, media_type, media_encoding, event_code, channel_id)
 
-    def media_data_upload(self, media_id, media_type, media_encoding, event_id, channel_id, media_data, loc_data):
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("media_event_upload data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
+
+    def media_data_upload(self, media_id, media_type, media_encoding, event_code, channel_id, media_data, loc_data):
         """Multimedia data upload
 
         Args:
@@ -1327,7 +1425,7 @@ class JTT808(JTT808Base):
                 2 - MP3
                 3 - WAV
                 4 - WMV
-            event_id(int):
+            event_code(int):
                 0 - Platform issues instructions
                 1 - timed action
                 2 - Robbery alarm triggered
@@ -1338,6 +1436,15 @@ class JTT808(JTT808Base):
                 7 - Take pictures at a fixed distance
             channel_id(int): channel id
             media_data(bytes): media data bytes
+            loc_data(tuple): (alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time)
+                alarm_flag(str): LocAlarmWarningConfig().value()
+                loc_status(str): LocStatusConfig().value()
+                latitude(float): latitude
+                longitude(float): longitude
+                altitude(int): unit: meter
+                speed(float): unit: km/h, Accurate to 0.1
+                direction(int): range: 0~359, 0 is true North, Clockwise.
+                time(str): GMT+8, format: YYMMDDhhmmss
 
         Returns:
             dict:
@@ -1352,13 +1459,19 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0801]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
-        up_msg_obj.set_params(media_id, media_type, media_encoding, event_id, channel_id, media_data)
+        up_msg_obj.set_params(media_id, media_type, media_encoding, event_code, channel_id, media_data)
         up_msg_obj.set_loc_data(*loc_data)
-        data = up_msg_obj.message()
-        logger.debug("media_data_upload data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("media_data_upload data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def camera_shoots_immediately_response(self, response_serial_no, result, ids):
         """The camera shoots the command immediately response
@@ -1385,12 +1498,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0805]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(response_serial_no, result, ids)
-        data = up_msg_obj.message()
-        logger.debug("camera_shoots_immediately_response data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("camera_shoots_immediately_response data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def stored_media_data_retrieval_response(self, response_serial_no, medias):
         """Stored multimedia data retrieval response
@@ -1398,23 +1517,19 @@ class JTT808(JTT808Base):
         Args:
             response_serial_no(int): response serial no
             medias(list):
-                item(tuple): (media_id, media_type, channel_id, event_id, loc_data)
+                item(tuple): (media_id, media_type, channel_id, event_code, loc_data)
                     media_id(int): media id
                     media_type(int):
                         0 - picture
                         1 - audio
                         2 - video
                     channel_id(int): channel id
-                    event_id(int):
+                    event_code(int):
                         0 - Platform issues instructions
                         1 - timed action
                         2 - Robbery alarm triggered
                         3 - Collision Rollover Alarm Triggered
-                        4 - Open the door and take a photo
-                        5 - Close the door and take a photo
-                        6 - Door from open to closed, Speed ​​from 20km to over 20km
-                        7 - Take pictures at a fixed distance
-                    loc_data(str): T0200.get_body()
+                    loc_data(tuple): (alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time)
 
         Returns:
             dict:
@@ -1429,14 +1544,20 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0802]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(response_serial_no)
         for media in medias:
             up_msg_obj.set_media(*media)
-        data = up_msg_obj.message()
-        logger.debug("stored_media_data_retrieval_response data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("stored_media_data_retrieval_response data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def data_uplink_transparent_transmission(self, data_type, data):
         """Data uplink transparent transmission
@@ -1463,12 +1584,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0900]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(data_type, data)
-        data = up_msg_obj.message()
-        logger.debug("data_uplink_transparent_transmission data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("data_uplink_transparent_transmission data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def data_compression_report(self, data):
         """data compression report
@@ -1489,12 +1616,18 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0901]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(data)
-        data = up_msg_obj.message()
-        logger.debug("data_compression_report data: %s" % data)
-        return self.send(data, 0x8001, serial_no)
+
+        if self.__encryption:
+            up_msg_obj.set_excryption(self.__encryption, self.__rsa_e, self.__rsa_n)
+        msgs = up_msg_obj.message()
+        for serial_no, data in msgs:
+            logger.debug("data_compression_report data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
+            if send_res["result_code"] != 0:
+                break
+
+        return send_res
 
     def terminal_rsa_public_key(self, e, n):
         """Terminal RSA public key
@@ -1516,9 +1649,8 @@ class JTT808(JTT808Base):
             return empty dict if get server response failed.
         """
         up_msg_obj = UPLINK_MESSAGE[0x0A00]()
-        serial_no = self.get_serial_no()
-        up_msg_obj.set_serial_no(serial_no)
         up_msg_obj.set_params(e, n)
-        data = up_msg_obj.message()
+        msgs = up_msg_obj.message()
+        serial_no, data = msgs[0]
         logger.debug("terminal_rsa_public_key data: %s" % data)
         return self.send(data, 0x8001, serial_no)

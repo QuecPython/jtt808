@@ -24,13 +24,15 @@
 @copyright :Copyright (c) 2022
 """
 
+import rsa
 import sim
 import modem
 import utime
-from usr.jtt808 import JTT808
+from usr.jtt808 import JTT808, GENERAL_ANSWER_MSG_ID
 from usr.logging import getLogger
 from usr.jt_message import LicensePlateColor, TerminalParams, \
     LocAlarmWarningConfig, LocStatusConfig, LocAdditionalInfoConfig
+
 
 logger = getLogger(__name__)
 
@@ -43,7 +45,7 @@ version = "2019"
 jtt808_obj = JTT808(ip=ip, port=port, method=method, version=version, client_id=client_id)
 
 
-def test_loction_data():
+def test_init_loction_data():
     LocStatusConfigObj = LocStatusConfig()
     LocAlarmWarningConfigObj = LocAlarmWarningConfig()
     LocAdditionalInfoConfigObj = LocAdditionalInfoConfig()
@@ -53,8 +55,8 @@ def test_loction_data():
     LocAdditionalInfoConfigObj.set_oil_quantity(32.5)
     LocAdditionalInfoConfigObj.set_speed(0)
 
-    alarm_flag = LocAlarmWarningConfigObj.value()
-    logger.debug("alarm_flag: %s" % alarm_flag)
+    alarm_config = LocAlarmWarningConfigObj.value()
+    logger.debug("alarm_config: %s" % str(alarm_config))
     loc_status = LocStatusConfigObj.value()
     logger.debug("loc_status: %s" % loc_status)
     latitude = 31.824845156501
@@ -66,7 +68,7 @@ def test_loction_data():
     loc_additional_info = LocAdditionalInfoConfigObj.value()
     logger.debug("loc_additional_info: %s" % loc_additional_info)
 
-    return (alarm_flag, loc_status, latitude, longitude, altitude, speed, direction, time, loc_additional_info)
+    return (alarm_config[0], loc_status, latitude, longitude, altitude, speed, direction, time, loc_additional_info)
 
 
 def test_general_answer(serial_no, message_id):
@@ -74,11 +76,13 @@ def test_general_answer(serial_no, message_id):
 
 
 def test_params_report(response_serial_no):
-    terminal_params = {
-        0x0013: TerminalParams(0x0013).convert("220.180.239.212:7611"),
-        0x0001: TerminalParams(0x0001).convert(60),
-        0x0002: TerminalParams(0x0002).convert(30),
-    }
+    TerminalParamsObj = TerminalParams()
+    TerminalParamsObj.set_params(0x0013, "220.180.239.212:7611")
+    TerminalParamsObj.set_params(0x0001, 60)
+    TerminalParamsObj.set_params(0x0002, 30)
+    TerminalParamsObj.set_params(0x0032, 8, 12, 17, 30)
+    param_data = TerminalParamsObj.get_params()
+    terminal_params = {key: val["hex"] for key, val in param_data.items()}
     jtt808_obj.params_report(response_serial_no, terminal_params)
 
 
@@ -118,7 +122,7 @@ def test_properties_report():
 
 
 def test_loction_report(response_msg_id=None, response_serial_no=None):
-    loc_data = test_loction_data()
+    loc_data = test_init_loction_data()
     args = [response_msg_id, response_serial_no]
     args.extend(list(loc_data))
     jtt808_obj.loction_report(*args)
@@ -177,9 +181,9 @@ def test_stored_media_data_retrieval_response(response_serial_no):
     media_id = 1
     media_type = 0
     channel_id = 2
-    event_id = 5
-    loc_data = test_loction_data()[:-1]
-    medias = [(media_id, media_type, channel_id, event_id, loc_data)] * 10
+    event_code = 5
+    loc_data = test_init_loction_data()[:-1]
+    medias = [(media_id, media_type, channel_id, event_code, loc_data)] * 10
     jtt808_obj.stored_media_data_retrieval_response(response_serial_no, medias)
 
 
@@ -210,6 +214,8 @@ def test_callback(args):
         test_camera_shoots_immediately_response(header["serial_no"])
     elif header["message_id"] == 0x8802:
         test_stored_media_data_retrieval_response(header["serial_no"])
+    elif header["message_id"] in GENERAL_ANSWER_MSG_ID:
+        test_general_answer(header["serial_no"], header["message_id"])
 
 
 def test_connect():
@@ -218,12 +224,23 @@ def test_connect():
     assert conn_res, "%s connect failed." % method
 
 
+def test_set_encryption():
+    rsa.gen_keypair()
+    n_e = rsa.get_pubkey()
+    encryption = True
+    rsa_n = n_e[0]
+    rsa_e = int(n_e[1], 16)
+    set_encryption_res = jtt808_obj.set_encryption(encryption, rsa_e, rsa_n)
+    assert set_encryption_res, "set_encryption failed."
+    print("set_encryption success.")
+
+
 def test_heart_beat():
     jtt808_obj.__heart_beat(None)
 
 
 def test_register():
-    province_id = "0034"
+    province_id = "34"
     city_id = "0100"
     manufacturer_id = "quectel"
     terminal_model = "EC200U-CNAA"
@@ -257,7 +274,7 @@ def test_electronic_waybill_report():
 
 
 def test_location_bulk_report():
-    loc_data = test_loction_data()
+    loc_data = test_init_loction_data()
     loc_datas = [loc_data] * 10
     logger.debug("loc_datas: %s" % str(loc_datas))
     data_type = 0
@@ -292,7 +309,7 @@ def test_media_data_upload():
     channel_id = 1
     with open("/usr/system_config.json", "rb") as f:
         media_data = f.read()
-    loc_data = test_loction_data()[:-1]
+    loc_data = test_init_loction_data()[:-1]
     jtt808_obj.media_data_upload(media_id, media_type, media_encoding, event_id, channel_id, media_data, loc_data)
 
 
@@ -309,8 +326,8 @@ def test_data_compression_report():
 
 
 def test_terminal_rsa_public_key():
-    e = 65537
-    n = 10923252007875538132171701535639644200191641194610072563985760225688326844567094363074389543489252121216915728771174747297043916958910473388186667405361889
+    e = 0x010001
+    n = "E5A55035C17123BFAB98733E9A619152CEAA13214261BA971EE3563CCF9790FA221FDD9D582B4E14ED200173B2D9822E561E99EE54B3A812ACCDDDEAD97DF6DA682583080F7733035BF22C956F6F96ED8F3E2E8DA1DE80C38B1A18956D719DCA407EC13E0C86E40502553C418180D520E6B9A18E04E3817F9CD185769233C9CB"
     jtt808_obj.terminal_rsa_public_key(e, n)
 
 
@@ -324,35 +341,37 @@ def test_jtt808():
     auth_code = "865306057798238"
     test_authentication(auth_code)
 
-    test_heart_beat()
+    test_set_encryption()
 
-    test_query_server_time()
+    # test_heart_beat()
 
-    test_upgrade_result_report()
+    # test_query_server_time()
+
+    # test_upgrade_result_report()
 
     test_loction_report()
 
-    test_event_report(0)
+    # test_event_report(0)
 
-    test_information_demand_cancellation(12, 1)
+    # test_information_demand_cancellation(12, 1)
 
-    test_electronic_waybill_report()
+    # test_electronic_waybill_report()
 
-    test_location_bulk_report()
+    # test_location_bulk_report()
 
-    test_can_bus_data_upload()
+    # test_can_bus_data_upload()
 
-    test_media_event_upload()
+    # test_media_event_upload()
 
-    test_media_data_upload()
+    # test_media_data_upload()
 
-    test_data_uplink_transparent_transmission()
+    # test_data_uplink_transparent_transmission()
 
-    test_data_compression_report()
+    # test_data_compression_report()
 
-    test_terminal_rsa_public_key()
+    # test_terminal_rsa_public_key()
 
-    test_logout()
+    # test_logout()
 
 
 def main():

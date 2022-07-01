@@ -26,6 +26,8 @@
 
 import _thread
 
+_serial_no_lock = _thread.allocate_lock()
+
 
 def option_lock(thread_lock):
     """Function thread lock decorator"""
@@ -72,3 +74,23 @@ class Singleton(object):
                 Singleton.instance_dict[str(cls)] = _instance
 
         return Singleton.instance_dict[str(cls)]
+
+
+class SerialNo(Singleton):
+
+    def __init__(self, num=99999):
+        self.__num = num
+        self.__iter_serial_no = iter(range(self.__num))
+
+    @option_lock(_serial_no_lock)
+    def get_serial_no(self):
+        """Get message serial number.
+
+        Returns:
+            int: serial number
+        """
+        try:
+            return next(self.__iter_serial_no)
+        except StopIteration:
+            self.__iter_serial_no = iter(range(self.__num))
+            return self.get_serial_no()
