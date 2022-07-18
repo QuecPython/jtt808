@@ -36,13 +36,18 @@ from usr.jt_message import LicensePlateColor, TerminalParams, \
 
 logger = getLogger(__name__)
 
-method = "TCP"
-ip = "220.180.239.212"
-port = 7611
-client_id = "18888888888"
-version = "2019"
+jtt808_obj = None
 
-jtt808_obj = JTT808(ip=ip, port=port, method=method, version=version, client_id=client_id)
+
+def test_init():
+    global jtt808_obj
+    method = "TCP"
+    ip = "220.180.239.212"
+    port = 7611
+    client_id = "18888888888"
+    version = "2019"
+
+    jtt808_obj = JTT808(ip=ip, port=port, method=method, version=version, client_id=client_id)
 
 
 def test_init_loction_data():
@@ -221,7 +226,7 @@ def test_callback(args):
 def test_connect():
     jtt808_obj.set_callback(test_callback)
     conn_res = jtt808_obj.connect()
-    assert conn_res, "%s connect failed." % method
+    assert conn_res, "%s connect failed." % jtt808_obj.__method
 
 
 def test_set_encryption():
@@ -332,6 +337,8 @@ def test_terminal_rsa_public_key():
 
 
 def test_jtt808():
+    test_init()
+
     test_connect()
 
     register_res = test_register()
@@ -343,35 +350,35 @@ def test_jtt808():
 
     test_set_encryption()
 
-    # test_heart_beat()
+    test_heart_beat()
 
-    # test_query_server_time()
+    test_query_server_time()
 
-    # test_upgrade_result_report()
+    test_upgrade_result_report()
 
     test_loction_report()
 
-    # test_event_report(0)
+    test_event_report(0)
 
-    # test_information_demand_cancellation(12, 1)
+    test_information_demand_cancellation(12, 1)
 
-    # test_electronic_waybill_report()
+    test_electronic_waybill_report()
 
-    # test_location_bulk_report()
+    test_location_bulk_report()
 
-    # test_can_bus_data_upload()
+    test_can_bus_data_upload()
 
-    # test_media_event_upload()
+    test_media_event_upload()
 
-    # test_media_data_upload()
+    test_media_data_upload()
 
-    # test_data_uplink_transparent_transmission()
+    test_data_uplink_transparent_transmission()
 
-    # test_data_compression_report()
+    test_data_compression_report()
 
-    # test_terminal_rsa_public_key()
+    test_terminal_rsa_public_key()
 
-    # test_logout()
+    test_logout()
 
 
 def main():
