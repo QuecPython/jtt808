@@ -1517,7 +1517,7 @@ print(general_answer_res)
 示例:
 
 ```python
-server_time = tt808_obj.query_server_time(response_serial_no, response_msg_id, result_code)
+server_time = tt808_obj.query_server_time()
 print(server_time)
 # {"utc_time": "2022-06-24 08:12:34"}
 ```
@@ -2427,7 +2427,7 @@ print(terminal_rsa_public_key_res)
 
 **消息体`data`:** 无
 
-**应答消息:** 该消息需使用`jtt808.loction_report`接口进行应答
+**应答消息:** 该消息需使用`jtt808.general_answer`接口进行应答
 
 ### **消息ID: 0x8300 -- 文本信息下发**
 
@@ -2759,7 +2759,7 @@ print(terminal_rsa_public_key_res)
 |cmd_word|int|命令字:<br>33 - 行驶状态记录, <br>34 - 事故疑点记录, <br>35 - 超时驾驶记录, <br>35 - 驾驶人信息记录, <br>37 - 日志记录|
 |cmd_data|bytes|数据块|
 
-**应答消息:** 该消息需使用`jtt808.query_area_route_data_response`接口进行应答
+**应答消息:** 该消息需使用`jtt808.general_answer`接口进行应答
 
 ### **消息ID: 0x8702 -- 上报驾驶员身份信息请求**
 
@@ -2786,7 +2786,7 @@ print(terminal_rsa_public_key_res)
 
 > 若终端不支持系统要求的分辨率, 则取最接近的分辨率拍摄上传
 
-**应答消息:** 该消息需使用`jtt808.driving_record_data_upload`接口进行应答
+**应答消息:** 该消息需使用`jtt808.camera_shoots_immediately_response`接口进行应答
 
 ### **消息ID: 0x8802 -- 存储多媒体数据检索**
 
@@ -2830,7 +2830,7 @@ print(terminal_rsa_public_key_res)
 
 **应答消息:** 该消息需使用`jtt808.general_answer`接口进行应答
 
-### **消息ID: 0x8805 -- 单挑存储多媒体数据检索上传命令**
+### **消息ID: 0x8805 -- 单条存储多媒体数据检索上传命令**
 
 **消息体`data`:**
 

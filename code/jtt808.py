@@ -353,10 +353,9 @@ class JTT808Base(SocketBase):
                     raise ValueError("rsa_e and rsa_n is required fields when encryption is True.")
                 if "rsa_priv.txt" not in uos.listdir("/usr"):
                     raise OSError("RSA private key file is not exist.")
-            return True
         except Exception as e:
             usys.print_exception(e)
-            return False
+        return False
 
     def send(self, data, res_msg_id, serial_no):
         """Send data to server
