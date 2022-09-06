@@ -24,7 +24,10 @@
 @copyright :Copyright (c) 2022
 """
 
-import rsa
+try:
+    import rsa
+except ImportError:
+    rsa = None
 import usys
 import ustruct
 import ubinascii
@@ -111,12 +114,12 @@ _TERMINAL_PARAMS = {
     ],
 }
 
-_RESERVATION_TERMINAL_PARAM_ID = list(range(0x0008, 0x0010)) + \
-    list(range(0x0018, 0x001A)) + list(range(0x001E, 0x0020)) + \
-    list(range(0x002A, 0x002C)) + list(range(0x0033, 0x0040)) + \
-    list(range(0x004A, 0x0050)) + list(range(0x005F, 0x0064)) + \
-    list(range(0x0066, 0x0070)) + list(range(0x0075, 0x0080)) + \
-    list(range(0xF000, 0x10000))
+# _RESERVATION_TERMINAL_PARAM_ID = list(range(0x0008, 0x0010)) + \
+#     list(range(0x0018, 0x001A)) + list(range(0x001E, 0x0020)) + \
+#     list(range(0x002A, 0x002C)) + list(range(0x0033, 0x0040)) + \
+#     list(range(0x004A, 0x0050)) + list(range(0x005F, 0x0064)) + \
+#     list(range(0x0066, 0x0070)) + list(range(0x0075, 0x0080)) + \
+#     list(range(0xF000, 0x10000))
 
 
 def set_jtmsg_config(jtt808_version="2019", client_id=""):

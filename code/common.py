@@ -136,6 +136,7 @@ class SocketBase(Singleton):
                 self.__port == 8883 if self.__domain.startswith("https://") else 1883
             try:
                 addr_info = usocket.getaddrinfo(self.__domain, self.__port)
+                logger.debug("addr_info: %s" % str(addr_info))
                 self.__ip = addr_info[0][-1][0]
             except Exception as e:
                 usys.print_exception(e)
@@ -288,17 +289,13 @@ class SocketBase(Singleton):
         data = b""
         if self.__socket is not None:
             try:
+                self.__socket.settimeout(None)
                 while True:
+                    data = self.__socket.recv(bufsize)
+                    logger.debug("data: %s" % data)
                     if data:
-                        self.__socket.settimeout(0.5)
-                    else:
-                        self.__socket.settimeout(self.__timeout)
-                    read_data = self.__socket.recv(bufsize)
-                    logger.debug("read_data: %s" % read_data)
-                    if read_data:
-                        data += read_data
-                    else:
                         break
+                return data
             except Exception as e:
                 if e.args[0] != 110:
                     usys.print_exception(e)

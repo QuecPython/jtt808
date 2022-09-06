@@ -106,7 +106,9 @@ class JTT808Base(SocketBase):
                     msg_indexs = [index for index, item in enumerate(msgs) if item == 0x7e]
                     if msg_indexs[1] - msg_indexs[0] == 1:
                         msg_indexs = msg_indexs[1:]
+                    logger.debug("msg_indexs: %s" % str(msg_indexs))
                     range_num = len(msg_indexs) if len(msg_indexs) % 2 == 0 else len(msg_indexs) - 1
+                    logger.debug("range_num: %s" % str(range_num))
                     # Parse each packet in order
                     for i in range(0, range_num, 2):
                         msg = bytearray(msgs[msg_indexs[i]:msg_indexs[i + 1] + 1]).decode().encode()

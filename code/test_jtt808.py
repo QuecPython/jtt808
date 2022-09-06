@@ -24,7 +24,10 @@
 @copyright :Copyright (c) 2022
 """
 
-import rsa
+try:
+    import rsa
+except ImportError:
+    rsa = None
 import sim
 import modem
 import utime
@@ -42,12 +45,16 @@ jtt808_obj = None
 def test_init():
     global jtt808_obj
     method = "TCP"
-    ip = "220.180.239.212"
-    port = 7611
+    # ip = "220.180.239.212"
+    # port = 7611
+    # domain = None
+    ip = None
+    domain = "d9760.iotchs.xyz"
+    port = 9760
     client_id = "18888888888"
-    version = "2019"
+    version = "2013"
 
-    jtt808_obj = JTT808(ip=ip, port=port, method=method, version=version, client_id=client_id)
+    jtt808_obj = JTT808(ip=ip, port=port, method=method, domain=domain, version=version, client_id=client_id)
 
 
 def test_init_loction_data():
@@ -345,38 +352,38 @@ def test_jtt808():
     auth_code = register_res.get("auth_code")
     print("auth_code: %s" % auth_code)
 
-    auth_code = "865306057798238"
+    # auth_code = "865306057798238"
     test_authentication(auth_code)
 
-    test_set_encryption()
+    # test_set_encryption()
 
     test_heart_beat()
 
     test_query_server_time()
 
-    test_upgrade_result_report()
+    # test_upgrade_result_report()
 
     test_loction_report()
 
-    test_event_report(0)
+    # test_event_report(0)
 
-    test_information_demand_cancellation(12, 1)
+    # test_information_demand_cancellation(12, 1)
 
-    test_electronic_waybill_report()
+    # test_electronic_waybill_report()
 
-    test_location_bulk_report()
+    # test_location_bulk_report()
 
-    test_can_bus_data_upload()
+    # test_can_bus_data_upload()
 
-    test_media_event_upload()
+    # test_media_event_upload()
 
-    test_media_data_upload()
+    # test_media_data_upload()
 
-    test_data_uplink_transparent_transmission()
+    # test_data_uplink_transparent_transmission()
 
-    test_data_compression_report()
+    # test_data_compression_report()
 
-    test_terminal_rsa_public_key()
+    # test_terminal_rsa_public_key()
 
     test_logout()
 
