@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
 @file      :jt_message.py
 @author    :Jack Sun (jack.sun@quectel.com)
@@ -25,7 +22,7 @@
 """
 
 import rsa
-import usys
+import sys
 import ustruct
 import ubinascii
 from usr.logging import getLogger
@@ -136,7 +133,7 @@ def set_jtmsg_config(jtt808_version="2019", client_id=""):
     _jtt808_version = jtt808_version
 
     if JTT808_VERSION.get(jtt808_version) is None:
-        raise ValueError("JT808 version only in 2011, 2013, 2019. not %" % jtt808_version)
+        raise ValueError("JT808 version only in 2011, 2013, 2019. not %s" % jtt808_version)
     _protocol_version = JTT808_VERSION.get(jtt808_version) if JTT808_VERSION.get(jtt808_version) > 0 else ""
 
     _version = True if _protocol_version != "" and _protocol_version > 0 else False
@@ -330,7 +327,7 @@ class TerminalParams(object):
             }
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_params(self):
@@ -359,7 +356,7 @@ class TerminalParams(object):
                 self.__param_info.pop(param_id)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def __convert_hex(self, value, data_type=int, length=0):
@@ -528,7 +525,7 @@ class TerminalParams(object):
         Returns:
             string: format color_code
         """
-        return self.__convert_hex(value, data_type=int, length=2)
+        return self.__convert_hex(color_code, data_type=int, length=2)
 
     def __convert_0x0090(self, gps_onoff, bds_onoff, glonass_onoff, galileo_onoff):
         """GNSS positioning mode
@@ -595,7 +592,7 @@ class TerminalParams(object):
         Returns:
             string: format upload_method
         """
-        return self.__convert_hex(value, data_type=int, length=2)
+        return self.__convert_hex(upload_method, data_type=int, length=2)
 
     def __convert_0x0110(self, can_bus_id, collection_method, frame_type, can_channel_no, collection_time_interval):
         """CAN bus ID separate acquisition settings
@@ -805,7 +802,8 @@ class LocStatusConfig(object):
             else:
                 self.__loc_status ^= (self.__loc_status & (0b1 << offset))
             return True
-        except:
+        except Exception as e:
+            sys.print_exception(e)
             return False
 
     def __get_status(self, offset, base_no=0b1):
@@ -1008,7 +1006,8 @@ class LocAlarmWarningConfig(object):
             else:
                 self.__key_sign ^= (self.__key_sign & (0b1 << offset))
             return True
-        except:
+        except Exception as e:
+            sys.print_exception(e)
             return False
 
     def set_alarm(self, name, onoff=0, shield_switch=0, sms_switch=0, shoot_switch=0, shoot_store=1, key_sign=0):
@@ -1091,7 +1090,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x01] = str_fill(hex(int(value * 10))[2:], target_len=8)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
         return False
 
     def get_mileage(self):
@@ -1114,7 +1113,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x02] = str_fill(hex(int(value * 10))[2:], target_len=4)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_oil_quantity(self):
@@ -1137,7 +1136,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x03] = str_fill(hex(int(value * 10))[2:], target_len=4)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_speed(self):
@@ -1160,7 +1159,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x04] = str_fill(hex(value)[2:], target_len=4)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_manually_confirm_the_alarm_event_id(self):
@@ -1211,7 +1210,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x06] = str_fill(bin(int(bin(value & 0xFFFF), 2))[2:], target_len=4)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_temperature(self):
@@ -1248,7 +1247,7 @@ class LocAdditionalInfoConfig(object):
                     raise ValueError("area_segment_id is not exists.")
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_over_speed_alarm(self):
@@ -1288,7 +1287,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x12] += str_fill(hex(direction)[2:], target_len=2)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_in_out_area_segment_alarm(self):
@@ -1324,7 +1323,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x13] += str_fill(hex(result)[2:], target_len=2)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_insufficient_or_too_long_driving_time(self):
@@ -1378,7 +1377,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x25] = str_fill(hex(int(self.additional_info[0x25], 2))[2:], target_len=8)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_vehicle_signal_status(self):
@@ -1439,7 +1438,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x2A] = str_fill(hex(int(self.additional_info[0x2A], 2))[2:], target_len=4)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_io_status(self):
@@ -1472,7 +1471,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x2B] = "{}{}".format(ad1, ad0)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_analog(self):
@@ -1499,7 +1498,7 @@ class LocAdditionalInfoConfig(object):
             self.additional_info[0x30] = str_fill(hex(value)[2:], target_len=2)
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def get_wireless_communication_network_signal_strength(self):
@@ -1646,7 +1645,7 @@ class JTMessage(object):
             self.__server_pub_rsa_n = n
             return True
         except Exception as e:
-            usys.print_exception(e)
+            sys.print_exception(e)
             return False
 
     def is_subpackage(self):

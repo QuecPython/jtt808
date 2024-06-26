@@ -1,66 +1,66 @@
-# JTT808用户指导手册
+# Instruction Manual
 
-## **注意事项**
+[中文](../zh/使用说明手册.md) | English
 
-- 该项目只提供JTT808协议客户端功能, 服务端需对接三方提供的服务端, 或自己搭建开源服务端进行使用。
-- 该项目只提供了功能接口, 具体的使用业务需另行开发。
-- JTT808协议中要求对发送失败的数据进行存储与重发, 该项目不进行失败数据存储, 需在业务层实现失败数据的存储与重发。
-- 心跳会在鉴权接口成功之后自动启动, 无需手动启动心跳。
-- 服务端下行数据与中断请求应答通过`set_callback`函数注册回调函数进行处理。
+**Note:**
 
-## 功能交互示意图
+- The project only provides JT/T808 protocol client-side functionality , the server needs to dock the server provided by the three parties , or build their own open-source server to use .
+- The project only provides a functional interface, the specific use of business needs to be developed separately.
+- JT/T808 protocol requires the sending of failed data storage and retransmission, the project does not fail to store data, need to realize the failure of the business layer data storage and retransmission.
+- Heartbeat will start automatically after the success of the authentication interface, no need to manually start the heartbeat.
+- The downstream data and interrupt request response on the server side are processed through the `set_callback` function to register the callback function.
 
-![](./media/jtt808.png)
+## Instructions For Use
 
-## 使用说明
+### 1. Parameter Configuration
 
-### 1. 参数配置
-
-#### 1.1 终端参数配置设置
+#### 1.1 Terminal Parameter Configuration Settings
 
 ```python
 from usr.jt_message import TerminalParams
 
-# 终端参数初始化
+# Terminal Parameter Initialization
 TerminalParamsObj = TerminalParams()
-# 主服务器地址
+# Primary Server Address
 TerminalParamsObj.set_params(0x0013, "220.180.239.212:7611")
-# 终端心疼发送时间间隔
+# Terminal heartache sending interval
 TerminalParamsObj.set_params(0x0001, 60)
-# TCP消息应答超时时间
+# TCP message response timeout
 TerminalParamsObj.set_params(0x0002, 30)
-# 违规行驶时段范围
+# Range of illegal driving hours
 TerminalParamsObj.set_params(0x0032, 8, 12, 17, 30)
-# 终端参数信息, `value`值用于业务处理, `hex`值用于上报服务端
+# Terminal parameter information,
+# value value is used for service processing,
+# hex value is used for reporting to server side
 param_data = TerminalParamsObj.get_params()
 print(param_data)
 # {50: {'value': (8, 12, 17, 30), 'hex': '8C111E'}, 1: {'value': 60, 'hex': '0000003C'}, 2: {'value': 30, 'hex': '0000001E'}, 19: {'value': '220.180.239.212:7611', 'hex': '3232302E3138302E3233392E3231323A37363131'}}
 ```
 
-#### 1.2 定位状态配置设置
+#### 1.2 Positioning Status Configuration Settings
 
 ```python
 from usr.jt_message import LocStatusConfig
 
 LocStatusConfigObj = LocStatusConfig()
-# 设置ACC已开启
+# Set ACC Enabled
 LocStatusConfigObj.set_config("acc_onoff", 1)
-# 设置已开启定位
+# Set Positioning Enabled
 LocStatusConfigObj.set_config("loc_status", 1)
-# 设置纬度方向为北纬
+# Set the direction of latitude to north
 LocStatusConfigObj.set_config("NS_latitude", 0)
-# 设置经度方向为东经
+# Set the direction of longitude to East
 LocStatusConfigObj.set_config("EW_longitude", 0)
 ```
 
-#### 1.3 定位告警配置设置
+#### 1.3 Positioning Alarm Configuration Settings
 
 ```python
 from jt_message import LocAlarmWarningConfig
 
 LocAlarmWarningConfigObj = LocAlarmWarningConfig()
 
-# 超速报警
+# Speeding Alarm
 name = "over_speed_alarm"
 onoff = 1
 shield_switch = 1
@@ -70,7 +70,7 @@ shoot_store = 1
 key_sign = 1
 LocAlarmWarningConfigObj.set_alarm(name, onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign)
 
-# 疲劳驾驶报警
+# Fatigue Driving Alarm
 name = "fatigue_driving_alarm"
 onoff = 1
 shield_switch = 1
@@ -81,26 +81,26 @@ key_sign = 1
 LocAlarmWarningConfigObj.set_alarm(name, onoff, shield_switch, sms_switch, shoot_switch, shoot_store, key_sign)
 ```
 
-#### 1.4 附加定位配置设置
+#### 1.4 Additional Positioning Configuration Settings
 
 ```python
 from jt_message import LocAdditionalInfoConfig
 
 LocAdditionalInfoConfigObj = LocAdditionalInfoConfig()
-# 获取设置的车辆里程数
+# Set vehicle mileage
 LocAdditionalInfoConfigObj.set_mileage(101)
-# 获取设置的车辆油量数
+# Set number of vehicle fuel
 LocAdditionalInfoConfigObj.set_oil_quantity(50)
-# 设置车速
+# Set the speed
 LocAdditionalInfoConfigObj.set_speed(60)
-# 设置车辆胎压
+# Set Vehicle Tire Pressure
 values = [240, 240, 235, 230]
 LocAdditionalInfoConfigObj.set_tire_pressure(values)
 ```
 
-### 2. 连接初始化
+### 2. Connection Initialization
 
-#### 2.1. 功能初始化
+#### 2.1. Function Initialization
 
 ```python
 from usr.jtt808 import JTT808
@@ -114,13 +114,13 @@ client_id = "18888888888"
 jtt808_obj = JTT808(ip=ip, port=port, method=method, version=version, client_id=client_id)
 ```
 
-#### 2.2. 注册回调函数
+#### 2.2. Registering Callback Function
 
 ```python
 def test_callback(args):
     header = args["header"]
     data = args["data"]
-    # TODO: Different response for different server message.
+    # TODO: Different answer processing according to different messages.
     pass
 
 res = jtt808_obj.set_callback(test_callback)
@@ -128,7 +128,7 @@ print(res)
 # True
 ```
 
-#### 2.3. 连接服务器
+#### 2.3. Connecting To The Server
 
 ```python
 conn_res = jtt808_obj.connect()
@@ -136,7 +136,9 @@ print(conn_res)
 # True
 ```
 
-#### 2.4. 设置消息加密(该功能需服务端先下发服务端公钥信息才可设置生效)
+#### 2.4. Setting Up Message Encryption
+
+- This function requires the server to send the server public key information before the setting can take effect.
 
 ```python
 from usr.jtt808 import GENERAL_ANSWER_MSG_ID
@@ -144,20 +146,22 @@ from usr.jtt808 import GENERAL_ANSWER_MSG_ID
 def test_callback(args):
     header = args["header"]
     data = args["data"]
-    # GENERAL_ANSWER_MSG_ID 中包含了使用通用应答的所有服务端消息ID
+    # GENERAL_ANSWER_MSG_ID contains the IDs of all server-side messages that use the generic response.
     if header["message_id"] in GENERAL_ANSWER_MSG_ID:
-        # TODO: 根据不同的消息进行业务处理后应答
+        # TODO: Answer after business processing based on different messages.
         jtt808_obj.general_answer(header["serial_no"], header["message_id"])
-    # TODO: 消息ID不在 GENERAL_ANSWER_MSG_ID中的, 需根据对应的应答接口进行应答, 具体见API文档.
+    # TODO: If the message ID is not in GENERAL_ANSWER_MSG_ID,
+    # you need to answer the message according to the corresponding answer interface,
+    # see API documentation for details.
 
 res = jtt808_obj.set_callback(test_callback)
 print(res)
 # True
 ```
 
-### 3. 终端注册&鉴权
+### 3. Terminal Registration & Authentication
 
-#### 3.1. 终端注册
+#### 3.1. Terminal Registration
 
 ```python
 import uos
@@ -170,14 +174,14 @@ manufacturer_id = "quectel"
 terminal_model = uos.uname()[0].split("=")[1]
 terminal_id = modem.getDevImei()
 license_plate_color = LicensePlateColor.blue
-license_plate = "皖A88888"
+license_plate = "A88888"
 
 register_res = jtt808_obj.register(province_id, city_id, manufacturer_id, terminal_model, terminal_id, license_plate_color, license_plate)
 print(register_res)
 # {'registration_result': 0, 'serial_no': 0, 'auth_code': '865306057798238'}
 ```
 
-#### 3.2. 终端鉴权
+#### 3.2. Terminal Authentication
 
 ```python
 import modem
@@ -190,9 +194,19 @@ print(res)
 # {'message_id': 258, 'serial_no': 1, 'result_code': 0}
 ```
 
-### 4. 终端与服务器信息交互
+### 4. Terminal-Server Information Interaction
 
-#### 4.1. 查询服务器时间
+#### 4.1. Send Heartbeat
+
+- Periodically timed sends.
+
+```python
+heart_beat_res = tt808_obj.heart_beat()
+print(heart_beat_res)
+# True
+```
+
+#### 4.2. Query Server Time
 
 ```python
 res = jtt808_obj.query_server_time()
@@ -200,7 +214,7 @@ print(res)
 # {'utc_time': '2022-06-17 08:25:44'}
 ```
 
-#### 4.2. 生成定位信息并上报
+#### 4.3. Generate and Report Location Information
 
 ```python
 import utime
@@ -240,7 +254,7 @@ print(res)
 # {'message_id': 512, 'serial_no': 3, 'result_code': 0}
 ```
 
-#### 4.3. 定位信息批量上报
+#### 4.4. Bulk Reporting of Location Information
 
 ```python
 loc_data = test_init_loction_data()
@@ -251,7 +265,7 @@ print(res)
 # {'message_id': 1796, 'serial_no': 4, 'result_code': 0}
 ```
 
-#### 4.4. 事件上报
+#### 4.5. Incident Reporting
 
 ```python
 # event id from server message 0x8301 set event.
@@ -261,7 +275,7 @@ print(res)
 # {'message_id': 769, 'serial_no': 5, 'result_code': 0}
 ```
 
-#### 4.5. 升级结果上报
+#### 4.6. Reporting of Escalation Results
 
 ```python
 upgrade_type = 0
@@ -271,7 +285,7 @@ print(res)
 # {'message_id': 264, 'serial_no': 6, 'result_code': 0}
 ```
 
-#### 4.6. 电子运单上报
+#### 4.7. Electronic Waybill Reporting
 
 ```python
 with open("/path/xxx.xxx", "rb") as f:
@@ -281,7 +295,7 @@ with open("/path/xxx.xxx", "rb") as f:
 # {'message_id': 1793, 'serial_no': 7, 'result_code': 0}
 ```
 
-#### 4.7. 信息点播/取消
+#### 4.8. Information on Demand / Cancel
 
 ```python
 # info type from server message 0x8303, information on demand menu settings.
@@ -293,7 +307,7 @@ print(res)
 # {'message_id': 771, 'serial_no': 8, 'result_code': 0}
 ```
 
-#### 4.8. CAN总线数据上传
+#### 4.9. CAN Bus Data Upload
 
 ```python
 recive_time = ("{:2d}" * 3 + "0000").format(*(utime.localtime()[3:6]))
@@ -308,7 +322,7 @@ print(res)
 # {'message_id': 1797, 'serial_no': 9, 'result_code': 0}
 ```
 
-#### 4.9. 多媒体事件上传
+#### 4.10. Multimedia Event Upload
 
 ```python
 media_id = 12
@@ -321,7 +335,7 @@ print(res)
 # {'message_id': 2048, 'serial_no': 10, 'result_code': 0}
 ```
 
-#### 4.10. 多媒体数据上传
+#### 4.11. Multimedia Data Upload
 
 ```python
 media_id = 14
@@ -337,7 +351,7 @@ with open("/xxx/xxx.xxx", "rb") as f:
 # {'message_id': 2049, 'serial_no': 11, 'result_code': 0}
 ```
 
-#### 4.11. 数据上行透传
+#### 4.12. Data Uplink Passthrough
 
 ```python
 data_type = 0
@@ -347,7 +361,7 @@ print(res)
 # {'message_id': 2304, 'serial_no': 12, 'result_code': 0}
 ```
 
-#### 4.12. 数据压缩上报
+#### 4.13. Data Compression Reporting
 
 ```python
 with open("/xxx/xxx.xxx", "rb") as f:
@@ -357,11 +371,12 @@ with open("/xxx/xxx.xxx", "rb") as f:
 # {'message_id': 2305, 'serial_no': 13, 'result_code': 0}
 ```
 
-#### 4.13. 终端RSA公钥上报
+#### 4.14. Endpoint RSA Public Key Reporting
 
 ```python
 e = 65537
-n = 10923252007875538132171701535639644200191641194610072563985760225688326844567094363074389543489252121216915728771174747297043916958910473388186667405361889
+n = "10923252007875538132171701535639644200191641194610072563985760225688326844567094363074" \
+    "389543489252121216915728771174747297043916958910473388186667405361889"
 res = jtt808_obj.terminal_rsa_public_key(e, n)
 print(res)
 # {'message_id': 2560, 'serial_no': 14, 'result_code': 0}

@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
 @file      :jtt808.py
 @author    :Jack Sun (jack.sun@quectel.com)
@@ -30,7 +27,7 @@ import utime
 import osTimer
 import _thread
 from usr.logging import getLogger
-from usr.common import SocketBase
+from usr.common import TCPUDPBase
 from usr.jt_message import DOWNLINK_MESSAGE, UPLINK_MESSAGE, JTMessageParse, set_jtmsg_config
 
 logger = getLogger(__name__)
@@ -44,11 +41,11 @@ GENERAL_ANSWER_MSG_ID = (
 )
 
 
-class JTT808Base(SocketBase):
+class JTT808Base(TCPUDPBase):
     """This class is base option for JTT808."""
 
-    def __init__(self, ip=None, port=None, domain=None, method="TCP", timeout=30, retry_count=3,
-                 life_time=60, version="2019", client_id=""):
+    def __init__(self, ip=None, port=None, domain=None, method="TCP", timeout=30,
+                 retry_count=3, version="2019", client_id=""):
         """
         Args:
             ip: server ip address (default: {None})
@@ -57,114 +54,20 @@ class JTT808Base(SocketBase):
             method: TCP or UDP (default: {"TCP"})
             timeout: socket read data timeout. (default: {30})
             retry_count: socket send data retry count. (default: {3})
-            life_time: heart beat recycle time. (default: {60})
             version: jtt808 version (default: {"2019"})
             client_id: device sim phone number. (default: {""})
         """
-        super().__init__(ip=ip, port=port, domain=domain, method=method)
+        super().__init__(ip=ip, port=port, domain=domain, method=method, timeout=timeout)
         set_jtmsg_config(jtt808_version=version, client_id=client_id)
-        self.__timeout = timeout
         self.__retry_count = retry_count
-        self.__life_time = life_time
         self.__response_res = {}
         self.__response_subpkg = {}
         self.__subpkg_timer = {}
         self.__subpkg_msg_ids = []
         self.__resend_subpkg_msg_ids = []
-        self.__read_thread = None
-        self.__heart_beat_timer = osTimer()
-        self.__heart_beat_is_running = False
-        self.__callback = None
         self.__encryption = False
         self.__rsa_e = None
         self.__rsa_n = None
-
-    def __read_response(self):
-        """This function is downlink thread function.
-
-        Functions:
-            1. receive server response.
-            2. receive server request.
-        """
-        message = b""
-        while True:
-            try:
-                if self.status() not in (0, 1):
-                    logger.error("%s connection status is %s" % (self.__method, self.status()))
-                    break
-
-                # When read data is empty, discard message's data
-                new_msg = self.__read()
-                if new_msg:
-                    message += new_msg
-                else:
-                    message = new_msg
-
-                if message:
-                    # Check how many packets are in this message
-                    msgs = list(bytearray(message))
-                    msg_indexs = [index for index, item in enumerate(msgs) if item == 0x7e]
-                    if msg_indexs[1] - msg_indexs[0] == 1:
-                        msg_indexs = msg_indexs[1:]
-                    range_num = len(msg_indexs) if len(msg_indexs) % 2 == 0 else len(msg_indexs) - 1
-                    # Parse each packet in order
-                    for i in range(0, range_num, 2):
-                        msg = bytearray(msgs[msg_indexs[i]:msg_indexs[i + 1] + 1]).decode().encode()
-                        logger.debug("__read_response: %s" % msg)
-                        jtmessageparse_obj = JTMessageParse()
-                        jtmessageparse_obj.set_message(msg)
-                        header = jtmessageparse_obj.get_header()
-                        logger.debug("__read_response header: %s" % header)
-                        if DOWNLINK_MESSAGE.get(header["message_id"]) is None:
-                            logger.error("message_id [%s] is not downlink message id" % header["message_id"])
-                            continue
-                        msg_obj = DOWNLINK_MESSAGE.get(header["message_id"])()
-                        if header["message_id"] == 0x8A00:
-                            msg_obj.set_excryption(False)
-                        resp_body = jtmessageparse_obj.get_body()
-                        logger.debug("__read_response resp_body: %s" % resp_body)
-
-                        # Check subpackage
-                        full_body_flag = True
-                        if header["package_total"] != 0:
-                            if self.__subpkg_timer.get(header["message_id"]) is None:
-                                self.__subpkg_timer[header["message_id"]] = osTimer()
-                                self.__subpkg_timer[header["message_id"]].start(self.__timeout * 1000, 0, self.__check_subpackage)
-                            if header["message_id"] not in self.__subpkg_msg_ids:
-                                self.__subpkg_msg_ids.append(header["message_id"])
-                            full_data = self.__splice_subpackage(header, resp_body)
-                            if not full_data:
-                                full_body_flag = False
-                            else:
-                                header = full_data["header"]
-                                resp_body = full_data["body"]
-
-                        # If this message can parse full body, than notify user by callback function.
-                        if full_body_flag:
-                            msg_obj.set_header(header)
-                            msg_obj.set_body(resp_body)
-                            data = msg_obj.body_data()
-                            logger.debug("__read_response body_data: %s" % data)
-                            if header["message_id"] in (0x8001, 0x8100, 0x8003, 0x8004):
-                                self.__response_res[header["message_id"]] = {data["serial_no"] if data.get("serial_no") is not None else header["message_id"]: data}
-                            elif header["message_id"] == 0x8800:
-                                    if not data["package_ids"]:
-                                        self.general_answer(header["serial_no"], header["message_id"])
-                                    else:
-                                        # TODO: When media upload set subpackage, than server may issued this message
-                                        # Now media upload do not set subpackage.
-                                        pass
-                            else:
-                                if self.__callback:
-                                    # User to ack general_answer in callback for GENERAL_ANSWER_MSG_ID.
-                                    _thread.start_new_thread(self.__callback, ({"header": header, "data": data},))
-                                else:
-                                    # If not set callback, than auto ack general_answer
-                                    self.general_answer(header["serial_no"], header["message_id"])
-
-                    message = bytearray(msgs[msg_indexs[-1]:]).decode().encode() if len(msg_indexs) % 2 != 0 else b""
-            except Exception as e:
-                usys.print_exception(e)
 
     def __splice_subpackage(self, header, source_body):
         """This function to splice server subpackage request
@@ -268,21 +171,6 @@ class JTT808Base(SocketBase):
             count += 1
         return data
 
-    def __heart_beat(self, args):
-        """Heart beat to server.
-
-        Args:
-            args: useless.
-        """
-        if self.status() == 0:
-            up_msg_obj = UPLINK_MESSAGE[0x0002]()
-            msgs = up_msg_obj.message()
-            for serial_no, data in msgs:
-                logger.debug("heart_beat data: %s" % data)
-                self.send(data, 0x8001, serial_no)
-        else:
-            self._heart_beat_timer_stop()
-
     def __resend_subpackage(self, source_serial_no, package_ids):
         """Rquest resend subpackage for server.
 
@@ -298,36 +186,6 @@ class JTT808Base(SocketBase):
             logger.debug("__resend_subpackage data: %s" % data)
             send_res = self.send(data, None, serial_no)
             logger.debug("__resend_subpackage send res: %s" % send_res)
-
-    def _downlink_thread_start(self):
-        self.__read_thread = _thread.start_new_thread(self.__read_response, ())
-
-    def _downlink_thread_stop(self):
-        if self.__read_thread is not None:
-            _thread.stop_thread(self.__read_thread)
-            self.__read_thread = None
-
-    def _heart_beat_timer_start(self):
-        self.__heart_beat_timer.start(self.__life_time * 1000, 1, self.__heart_beat)
-        self.__heart_beat_is_running = True
-
-    def _heart_beat_timer_stop(self):
-        self.__heart_beat_timer.stop()
-        self.__heart_beat_is_running = False
-
-    def set_callback(self, callback):
-        """Set callback for server response or request
-
-        Args:
-            callback(function): user callback function.
-
-        Returns:
-            bool: True - success, False - falied.
-        """
-        if callable(callback):
-            self.__callback = callback
-            return True
-        return False
 
     def set_encryption(self, encryption=False, rsa_e=None, rsa_n=None):
         """Set server communication encryption
@@ -356,6 +214,76 @@ class JTT808Base(SocketBase):
         except Exception as e:
             usys.print_exception(e)
         return False
+
+    def parse(self, message):
+        """This function is downlink thread function."""
+        try:
+            if message:
+                # Check how many packets are in this message
+                msgs = list(bytearray(message))
+                msg_indexs = [index for index, item in enumerate(msgs) if item == 0x7e]
+                if msg_indexs[1] - msg_indexs[0] == 1:
+                    msg_indexs = msg_indexs[1:]
+                range_num = len(msg_indexs) if len(msg_indexs) % 2 == 0 else len(msg_indexs) - 1
+                # Parse each packet in order
+                for i in range(0, range_num, 2):
+                    msg = bytearray(msgs[msg_indexs[i]:msg_indexs[i + 1] + 1]).decode().encode()
+                    logger.debug("__read_response: %s" % msg)
+                    jtmessageparse_obj = JTMessageParse()
+                    jtmessageparse_obj.set_message(msg)
+                    header = jtmessageparse_obj.get_header()
+                    logger.debug("__read_response header: %s" % header)
+                    if DOWNLINK_MESSAGE.get(header["message_id"]) is None:
+                        logger.error("message_id [%s] is not downlink message id" % header["message_id"])
+                        continue
+                    msg_obj = DOWNLINK_MESSAGE.get(header["message_id"])()
+                    if header["message_id"] == 0x8A00:
+                        msg_obj.set_excryption(False)
+                    resp_body = jtmessageparse_obj.get_body()
+                    logger.debug("__read_response resp_body: %s" % resp_body)
+
+                    # Check subpackage
+                    full_body_flag = True
+                    if header["package_total"] != 0:
+                        if self.__subpkg_timer.get(header["message_id"]) is None:
+                            self.__subpkg_timer[header["message_id"]] = osTimer()
+                            self.__subpkg_timer[header["message_id"]].start(self.__timeout * 1000, 0, self.__check_subpackage)
+                        if header["message_id"] not in self.__subpkg_msg_ids:
+                            self.__subpkg_msg_ids.append(header["message_id"])
+                        full_data = self.__splice_subpackage(header, resp_body)
+                        if not full_data:
+                            full_body_flag = False
+                        else:
+                            header = full_data["header"]
+                            resp_body = full_data["body"]
+
+                    # If this message can parse full body, than notify user by callback function.
+                    if full_body_flag:
+                        msg_obj.set_header(header)
+                        msg_obj.set_body(resp_body)
+                        data = msg_obj.body_data()
+                        logger.debug("__read_response body_data: %s" % data)
+                        if header["message_id"] in (0x8001, 0x8100, 0x8003, 0x8004):
+                            self.__response_res[header["message_id"]] = {data["serial_no"] if data.get("serial_no") is not None else header["message_id"]: data}
+                        elif header["message_id"] == 0x8800:
+                            if not data["package_ids"]:
+                                self.general_answer(header["serial_no"], header["message_id"])
+                            else:
+                                # TODO: When media upload set subpackage, than server may issued this message
+                                # Now media upload do not set subpackage.
+                                pass
+                        else:
+                            if self.__callback:
+                                # User to ack general_answer in callback for GENERAL_ANSWER_MSG_ID.
+                                _thread.start_new_thread(self.__callback, ({"header": header, "data": data},))
+                            else:
+                                # If not set callback, than auto ack general_answer
+                                self.general_answer(header["serial_no"], header["message_id"])
+
+                message = bytearray(msgs[msg_indexs[-1]:]).decode().encode() if len(msg_indexs) % 2 != 0 else b""
+        except Exception as e:
+            usys.print_exception(e)
+        return message
 
     def send(self, data, res_msg_id, serial_no):
         """Send data to server
@@ -393,7 +321,7 @@ class JTT808(JTT808Base):
     """This class is incloud terminal request for JTT808."""
 
     def __init__(self, ip=None, port=None, domain=None, method="TCP", timeout=30, retry_count=3,
-                 life_time=60, version="2019", client_id=""):
+                 version="2019", client_id=""):
         """
         Args:
             ip(str): server ip address (default: {None})
@@ -402,13 +330,12 @@ class JTT808(JTT808Base):
             method(str): TCP or UDP (default: {"TCP"})
             timeout(int): socket read data timeout. (default: {30})
             retry_count(int): socket send data retry count. (default: {3})
-            life_time(int): heart beat recycle time. (default: {60})
             version(str): jtt808 version (default: {"2019"})
             client_id(str): device sim phone number. (default: {""})
         """
         super().__init__(
             ip=ip, port=port, domain=domain, method=method, timeout=timeout, retry_count=retry_count,
-            life_time=life_time, version=version, client_id=client_id
+            version=version, client_id=client_id
         )
 
     def general_answer(self, response_serial_no, response_msg_id, result_code=0):
@@ -503,9 +430,17 @@ class JTT808(JTT808Base):
         serial_no, data = msgs[0]
         logger.debug("authentication data: %s" % data)
         send_res = self.send(data, 0x8001, serial_no)
-        if send_res.get("result_code") == 0:
-            if self.__heart_beat_is_running is False:
-                self._heart_beat_timer_start()
+        return send_res
+
+    def heart_beat(self):
+        """Heart beat to server."""
+        send_res = False
+        if self.status() == 0:
+            up_msg_obj = UPLINK_MESSAGE[0x0002]()
+            msgs = up_msg_obj.message()
+            serial_no, data = msgs[0]
+            logger.debug("heart_beat data: %s" % data)
+            send_res = self.send(data, 0x8001, serial_no)
         return send_res
 
     def logout(self):
@@ -520,7 +455,6 @@ class JTT808(JTT808Base):
         logger.debug("log_out data: %s" % data)
         send_res = self.send(data, None, serial_no)
         logger.debug("log_out send res: %s" % send_res)
-        self._heart_beat_timer_stop()
         self._downlink_thread_stop()
         return send_res
         # TODO: Can not get response from server because server disconnect immediately after log out, not sure if there is a problem with the server
