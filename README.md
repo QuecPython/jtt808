@@ -1,38 +1,57 @@
-# 交通标准808协议(JT/T 808)客户端功能
+# JT/T 808
 
-## 修订历史
+[中文](./README_ZH.md) | English
 
-| Version |   Date     |   Author   |   Change expression   |
-| :------ | ---------- | ---------- | --------------------- |
-| 1.0.0   | 2022-06-30 | 孙健       | 初始版本               |
+## Introduction
 
-## JT/T808 介绍
+This project implements the JT/T808 client function of the transportation industry standard of the People's Republic of China. Users can directly use this function to interact with the corresponding server for data within the standard.
 
-### 功能概述
+## Functions
 
-该项目实现了中华人民共和国交通运输行业标准(JT/T808)**客户端**功能, 用户可直接使用该功能与对应服务端进行标准内的数据交互。
+- Terminal registration / logout, authentication
+- Heartbeat reporting
+- Query server time
+- Terminal parameter / attribute reporting
+- Report location information
+- Report incident information
+- Report upgrade results
+- Questions and answers
+- Information on demand / cancellation
+- Query area / route data response
+- Driving record data reporting
+- Electronic waybill data reporting
+- Driver information reporting
+- Multimedia data / event reporting
+- Universal data transfer
 
-### 主要功能
-
-- 终端注册/注销, 鉴权
-- 查询服务器时间
-- 终端参数/属性上报
-- 位置信息上报
-- 事件信息上报
-- 升级结果上报
-- 提问应答
-- 信息点播/取消
-- 查询区域/路线数据应答
-- 驾驶记录数据上报
-- 电子运单数据上报
-- 驾驶员信息上报
-- 多媒体数据/事件上报
-- 通用数据传输
-
-### 兼容版本
+## Compatible Version
 
 | Version      | Support  |
 | :----------- | ---------|
 | JT/T 808-2011 | Y        |
 | JT/T 808-2013 | Y        |
 | JT/T 808-2019 | Y        |
+
+## Usage
+
+- [API Reference Manual](./docs/en/API_Reference.md)
+- [Instruction Manual](./docs/en/Instruction_Manual.md)
+- [Client Example Code](./code/test_jtt808.py)
+
+## Contribution
+
+We welcome contributions to improve this project! Please follow these steps to contribute:
+
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature/your-feature`).
+3. Commit your changes (`git commit -m 'Add your feature'`).
+4. Push to the branch (`git push origin feature/your-feature`).
+5. Open a Pull Request.
+
+## License
+
+This project is licensed under the Apache License. See the [LICENSE](./LICENSE) file for details.
+
+## Support
+
+If you have any questions or need support, please refer to the [QuecPython documentation](https://python.quectel.com/doc/en) or open an issue in this repository.
