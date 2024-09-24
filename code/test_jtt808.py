@@ -166,7 +166,7 @@ def test_driver_identity_information_report():
     qualification_certificate_code = "88888"
     issuing_agency_name = "市级道路运输管理机构"
     certificate_validity = "20220701"
-    driver_id_number = "342426199309020031"
+    driver_id_number = "xxxxxxxxxxxxxxxxxx"
     jtt808_obj.driver_identity_information_report(
         status, time, ic_read_result, driver_name, qualification_certificate_code,
         issuing_agency_name, certificate_validity, driver_id_number
